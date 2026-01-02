@@ -172,31 +172,89 @@ def _dou_parse_payload(payload: dict, data_str: str, secao: str) -> List[Dict]:
 @st.cache_data(ttl=1800, show_spinner=False)
 def dou_coletar(data: dt.date, secoes: List[str]) -> pd.DataFrame:
     """
-    Coleta matérias do DOU por data e seção via endpoint 'leiturajornal'.
+    Coleta matérias do DOU por data e seção via página 'leiturajornal' (Imprensa Nacional).
+    - Tenta JSON (quando disponível)
+    - Se vier HTML, faz fallback com heurísticas de scraping (regex) sem depender de BeautifulSoup
     Retorna DataFrame com colunas padronizadas para o FiscalizaGov.
     """
     data_str = data.strftime("%Y-%m-%d")
     all_items: List[Dict] = []
 
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "X-Requested-With": "XMLHttpRequest",
+        "User-Agent": "Mozilla/5.0 (FiscalizaGov)"
+    }
+
+    def _dou_parse_html(html: str, data_str_: str, secao_: str) -> List[Dict]:
+        itens_local: List[Dict] = []
+        if not html:
+            return itens_local
+
+        link_iter = list(re.finditer(r'href="([^"]*(?:/web/dou/-/\d+)[^"]*)"', html))
+        if not link_iter:
+            return itens_local
+
+        for m in link_iter:
+            link = m.group(1)
+            if link.startswith("/"):
+                link = "https://www.in.gov.br" + link
+
+            start_ = max(0, m.start() - 200)
+            end_ = min(len(html), m.end() + 900)
+            snippet = html[start_:end_]
+
+            titulo = ""
+            mt = re.search(r'title="([^"]{5,200})"', snippet)
+            if mt:
+                titulo = mt.group(1).strip()
+            if not titulo:
+                ma2 = re.search(r'>([^<]{5,200})<\s*/a>', snippet)
+                if ma2:
+                    titulo = ma2.group(1).strip()
+
+            resumo = ""
+            mp = re.search(r'<p[^>]*>([^<]{10,400})</p>', snippet)
+            if mp:
+                resumo = mp.group(1).strip()
+
+            itens_local.append({
+                "Data": data_str_,
+                "Seção": secao_.upper(),
+                "Título": normalize_text(titulo),
+                "Órgão": "",
+                "Ementa/Resumo": normalize_text(resumo),
+                "Link": link
+            })
+
+        seen = set()
+        uniq = []
+        for it in itens_local:
+            lk = it.get("Link", "")
+            if lk and lk in seen:
+                continue
+            if lk:
+                seen.add(lk)
+            uniq.append(it)
+        return uniq
+
     for secao in secoes:
         params = {"data": data_str, "secao": secao}
         try:
-            r = requests.get(IN_LEITURAJORNAL_URL, params=params, timeout=18)
+            r = requests.get(IN_LEITURAJORNAL_URL, params=params, headers=headers, timeout=18)
             if r.status_code != 200:
                 continue
 
-            # Alguns retornos não são JSON puro; tentar extrair
+            payload = None
             try:
                 payload = r.json()
             except Exception:
-                # fallback: tenta achar JSON no texto
-                txt = r.text.strip()
-                payload = {}
-                if txt.startswith("{") and txt.endswith("}"):
-                    payload = json.loads(txt)
+                payload = None
 
             if isinstance(payload, dict) and payload:
                 all_items.extend(_dou_parse_payload(payload, data_str, secao))
+            else:
+                all_items.extend(_dou_parse_html(r.text, data_str, secao))
 
         except Exception:
             continue
@@ -207,13 +265,10 @@ def dou_coletar(data: dt.date, secoes: List[str]) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Normalizações finais
     for c in ["Título", "Órgão", "Ementa/Resumo", "Link"]:
         if c in df.columns:
             df[c] = df[c].fillna("").astype(str).map(normalize_text)
 
-    # Ordenação: por padrão, não há hora; manter título/ementa como está, mas com Data fixada
-    # Se existir campo que indique ordem/hora, o parser pode ser estendido.
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce").dt.strftime("%d/%m/%Y")
     df["Fonte"] = "DOU"
     return df[["Fonte", "Data", "Seção", "Órgão", "Título", "Ementa/Resumo", "Link"]]
