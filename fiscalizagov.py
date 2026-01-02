@@ -170,108 +170,202 @@ def _dou_parse_payload(payload: dict, data_str: str, secao: str) -> List[Dict]:
     return itens
 
 @st.cache_data(ttl=1800, show_spinner=False)
+
 def dou_coletar(data: dt.date, secoes: List[str]) -> pd.DataFrame:
     """
-    Coleta matérias do DOU por data e seção via página 'leiturajornal' (Imprensa Nacional).
-    - Tenta JSON (quando disponível)
-    - Se vier HTML, faz fallback com heurísticas de scraping (regex) sem depender de BeautifulSoup
-    Retorna DataFrame com colunas padronizadas para o FiscalizaGov.
+    Coleta itens do DOU por data e seção usando endpoints públicos da Imprensa Nacional
+    (pesquisa.in.gov.br), sem depender de JavaScript do portal.
+
+    Estratégia (MVP funcional):
+    1) Usa o HTML do "visualiza/index.jsp" para descobrir quantas páginas existem no dia/ seção.
+    2) Baixa PDFs página-a-página via INPDFViewer.
+    3) Extrai texto e detecta "títulos" de atos (PORTARIA/DECRETO/INSTRUÇÃO NORMATIVA etc.)
+       + tenta inferir Órgão pelo cabeçalho mais próximo.
+
+    Observação: isso é um "scanner" pragmático. Ele não reconstrói a matéria inteira
+    nem pega todos os metadados como o JSON interno do portal /web/dou.
     """
-    data_str = data.strftime("%Y-%m-%d")
+    # Mapeamento padrão (Imprensa Nacional):
+    # Seção 1: jornal=515; Seção 2: jornal=529; Seção 3: jornal=530
+    mapa_jornal = {"do1": 515, "do2": 529, "do3": 530}
+
+    ddmmyyyy = data.strftime("%d/%m/%Y")
+    ddmmyyyy_url = ddmmyyyy.replace("/", "%2F")
+
+    # Limites (para não "derreter" a app)
+    max_pages = int(os.getenv("DOU_MAX_PAGES", "35"))
+    max_items = int(os.getenv("DOU_MAX_ITEMS", "250"))
+
+    headers = {"User-Agent": "Mozilla/5.0 (FiscalizaGov)"}
+
+    def _get_total_pages(jornal_id: int) -> int:
+        url = f"https://pesquisa.in.gov.br/imprensa/jsp/visualiza/index.jsp?data={ddmmyyyy_url}&jornal={jornal_id}&pagina=1"
+        try:
+            r = requests.get(url, headers=headers, timeout=20)
+            if r.status_code != 200:
+                return 0
+            html = r.text or ""
+            # Exemplos comuns:
+            # "1 de 199"  |  "205 de 326"
+            m = re.search(r"(\d+)\s+de\s+(\d+)", html)
+            if m:
+                return int(m.group(2))
+            # fallback: tenta capturar totalArquivos=NNN
+            m2 = re.search(r"totalArquivos=(\d+)", html)
+            if m2:
+                return int(m2.group(1))
+            return 0
+        except Exception:
+            return 0
+
+    def _pdf_page_text(jornal_id: int, pagina: int) -> str:
+        pdf_url = (
+            "https://pesquisa.in.gov.br/imprensa/servlet/INPDFViewer"
+            f"?captchafield=firstAccess&data={ddmmyyyy_url}&jornal={jornal_id}&pagina={pagina}"
+        )
+        try:
+            r = requests.get(pdf_url, headers=headers, timeout=30)
+            if r.status_code != 200 or not r.content:
+                return ""
+            # Extração de texto do PDF
+            try:
+                from pdfminer.high_level import extract_text
+                return extract_text(io.BytesIO(r.content)) or ""
+            except Exception:
+                # fallback mínimo: tenta PyPDF2 se estiver disponível
+                try:
+                    import PyPDF2
+                    reader = PyPDF2.PdfReader(io.BytesIO(r.content))
+                    return "\n".join([(p.extract_text() or "") for p in reader.pages])
+                except Exception:
+                    return ""
+        except Exception:
+            return ""
+
+    # Detectores de ato (você pode expandir depois)
+    tipos = [
+        "PORTARIA",
+        "PORTARIA DE PESSOAL",
+        "DECRETO",
+        "INSTRUÇÃO NORMATIVA",
+        "INSTRUCAO NORMATIVA",
+        "RESOLUÇÃO",
+        "RESOLUCAO",
+        "LEI",
+        "MEDIDA PROVISÓRIA",
+        "MEDIDA PROVISORIA",
+        "DESPACHO",
+        "ATO",
+        "EDITAL",
+        "AVISO",
+        "EXTRATO",
+        "CHAMAMENTO",
+    ]
+
+    # Heurística de órgão/cabeçalho
+    orgao_keywords = (
+        "PRESIDÊNCIA", "PRESIDENCIA", "MINISTÉRIO", "MINISTERIO", "CASA CIVIL",
+        "AGÊNCIA", "AGENCIA", "SECRETARIA", "AUTARQUIA", "FUNDAÇÃO", "FUNDACAO",
+        "BANCO CENTRAL", "ADVOCACIA-GERAL", "CONTROLADORIA-GERAL"
+    )
+
+    def _is_header(line: str) -> bool:
+        s = line.strip()
+        if len(s) < 4 or len(s) > 90:
+            return False
+        # Maioria em caixa alta (inclui acentos)
+        letters = [c for c in s if c.isalpha()]
+        if not letters:
+            return False
+        upper = sum(1 for c in letters if c.upper() == c)
+        if upper / max(1, len(letters)) < 0.85:
+            return False
+        return any(k in s for k in orgao_keywords)
+
+    def _scan_text_to_items(text: str, secao_label: str, jornal_id: int, pagina: int) -> List[Dict]:
+        items: List[Dict] = []
+        if not text:
+            return items
+
+        # Normaliza linhas
+        lines = [re.sub(r"\s+", " ", ln).strip() for ln in text.splitlines()]
+        lines = [ln for ln in lines if ln]
+
+        current_orgao = ""
+        for i, ln in enumerate(lines):
+            if _is_header(ln):
+                current_orgao = ln
+                continue
+
+            ln_up = ln.upper()
+            if any(ln_up.startswith(t) for t in tipos):
+                titulo = ln.strip()
+
+                # às vezes o título quebra na linha seguinte
+                if i + 1 < len(lines):
+                    nxt = lines[i + 1].strip()
+                    if nxt and len(nxt) < 120 and not nxt.upper().startswith(tuple(tipos)):
+                        # junta se parecer continuação (ex: "Nº 123, DE ...")
+                        if re.search(r"^N[ºO]\.?\s*\d+|^Nº|^NO\s*\d+", nxt.upper()) or "," in nxt:
+                            titulo = f"{titulo} {nxt}"
+
+                # Resumo: pega um pedaço das próximas linhas (sem virar parede de texto)
+                resumo_lines = []
+                for j in range(i + 1, min(i + 8, len(lines))):
+                    if any(lines[j].upper().startswith(t) for t in tipos):
+                        break
+                    resumo_lines.append(lines[j])
+                resumo = " ".join(resumo_lines).strip()
+
+                link_pdf = (
+                    "https://pesquisa.in.gov.br/imprensa/servlet/INPDFViewer"
+                    f"?captchafield=firstAccess&data={ddmmyyyy_url}&jornal={jornal_id}&pagina={pagina}"
+                )
+
+                items.append({
+                    "Data": ddmmyyyy,
+                    "Seção": secao_label,
+                    "Órgão": current_orgao,
+                    "Título": titulo,
+                    "Ementa/Resumo": resumo,
+                    "Link": link_pdf,
+                    "Página": pagina,
+                })
+
+                if len(items) >= 50:  # limite por página (evita explosão)
+                    break
+
+        return items
+
     all_items: List[Dict] = []
 
-    headers = {
-        "Accept": "application/json, text/plain, */*",
-        "X-Requested-With": "XMLHttpRequest",
-        "User-Agent": "Mozilla/5.0 (FiscalizaGov)"
-    }
-
-    def _dou_parse_html(html: str, data_str_: str, secao_: str) -> List[Dict]:
-        itens_local: List[Dict] = []
-        if not html:
-            return itens_local
-
-        link_iter = list(re.finditer(r'href="([^"]*(?:/web/dou/-/\d+)[^"]*)"', html))
-        if not link_iter:
-            return itens_local
-
-        for m in link_iter:
-            link = m.group(1)
-            if link.startswith("/"):
-                link = "https://www.in.gov.br" + link
-
-            start_ = max(0, m.start() - 200)
-            end_ = min(len(html), m.end() + 900)
-            snippet = html[start_:end_]
-
-            titulo = ""
-            mt = re.search(r'title="([^"]{5,200})"', snippet)
-            if mt:
-                titulo = mt.group(1).strip()
-            if not titulo:
-                ma2 = re.search(r'>([^<]{5,200})<\s*/a>', snippet)
-                if ma2:
-                    titulo = ma2.group(1).strip()
-
-            resumo = ""
-            mp = re.search(r'<p[^>]*>([^<]{10,400})</p>', snippet)
-            if mp:
-                resumo = mp.group(1).strip()
-
-            itens_local.append({
-                "Data": data_str_,
-                "Seção": secao_.upper(),
-                "Título": normalize_text(titulo),
-                "Órgão": "",
-                "Ementa/Resumo": normalize_text(resumo),
-                "Link": link
-            })
-
-        seen = set()
-        uniq = []
-        for it in itens_local:
-            lk = it.get("Link", "")
-            if lk and lk in seen:
-                continue
-            if lk:
-                seen.add(lk)
-            uniq.append(it)
-        return uniq
-
-    for secao in secoes:
-        params = {"data": data_str, "secao": secao}
-        try:
-            r = requests.get(IN_LEITURAJORNAL_URL, params=params, headers=headers, timeout=18)
-            if r.status_code != 200:
-                continue
-
-            payload = None
-            try:
-                payload = r.json()
-            except Exception:
-                payload = None
-
-            if isinstance(payload, dict) and payload:
-                all_items.extend(_dou_parse_payload(payload, data_str, secao))
-            else:
-                all_items.extend(_dou_parse_html(r.text, data_str, secao))
-
-        except Exception:
+    for sec in secoes:
+        jornal_id = mapa_jornal.get(sec)
+        if not jornal_id:
             continue
 
-        time.sleep(0.2)
+        total_pages = _get_total_pages(jornal_id)
+        if total_pages <= 0:
+            continue
 
-    df = pd.DataFrame(all_items)
-    if df.empty:
-        return df
+        pages_to_scan = min(total_pages, max_pages)
 
-    for c in ["Título", "Órgão", "Ementa/Resumo", "Link"]:
-        if c in df.columns:
-            df[c] = df[c].fillna("").astype(str).map(normalize_text)
+        for pg in range(1, pages_to_scan + 1):
+            txt = _pdf_page_text(jornal_id, pg)
+            sec_label = {"do1": "DOU 1", "do2": "DOU 2", "do3": "DOU 3"}.get(sec, sec.upper())
+            items_pg = _scan_text_to_items(txt, sec_label, jornal_id, pg)
+            if items_pg:
+                all_items.extend(items_pg)
+                if len(all_items) >= max_items:
+                    break
 
-    df["Data"] = pd.to_datetime(df["Data"], errors="coerce").dt.strftime("%d/%m/%Y")
-    df["Fonte"] = "DOU"
-    return df[["Fonte", "Data", "Seção", "Órgão", "Título", "Ementa/Resumo", "Link"]]
+        if len(all_items) >= max_items:
+            break
+
+    if not all_items:
+        return pd.DataFrame(columns=["Data", "Seção", "Órgão", "Título", "Ementa/Resumo", "Link", "Página"])
+
+    return pd.DataFrame(all_items)
 
 def dou_filtrar(df: pd.DataFrame, termos: List[str]) -> pd.DataFrame:
     if df.empty:
