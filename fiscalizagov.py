@@ -1,25 +1,27 @@
-# fiscalizagov.py - FiscalizaGov (v0.1 MVP)
+# fiscalizagov.py - FiscalizaGov (v0.2)
 # ============================================================
-# Super sistema de fiscalização do Executivo (padrão Monitor Zanatta)
-# - Abas por módulo
-# - Ordenação pelo mais novo
-# - Exportação CSV/XLSX
-# - Notificações via Telegram (bot)
+# Sistema de fiscalizacao do Executivo (padrao Monitor Zanatta)
+# - Coleta do DOU compartilhada com o notificador (dou.py)
+# - Falha de coleta e sempre sinalizada, nunca vira "sem resultados"
+# - Exportacao CSV/XLSX e notificacoes via Telegram
 # ============================================================
 
+import hmac
+import io
 import os
-import re
-import time
-import json
+import html
 import datetime as dt
-from typing import List, Dict, Optional, Tuple
+from typing import List
 
 import pandas as pd
 import requests
 import streamlit as st
 
+import dou
+from dou import DEFAULT_SECOES_DOU, SECOES_DISPONIVEIS, agora_brasilia_str, normalize_text
+
 # ============================================================
-# CONFIGURAÇÃO DA PÁGINA (OBRIGATORIAMENTE PRIMEIRA CHAMADA)
+# CONFIGURACAO DA PAGINA (OBRIGATORIAMENTE PRIMEIRA CHAMADA)
 # ============================================================
 
 st.set_page_config(
@@ -27,46 +29,19 @@ st.set_page_config(
     layout="wide"
 )
 
-# ============================================================
-# CONSTANTES
-# ============================================================
-
-TZ_BRASILIA = "America/Sao_Paulo"  # compatível com Brasília (UTC-3)
-DEFAULT_SECOES_DOU = ["do1", "do2", "do3"]  # DOU 1, 2, 3
 APP_TITLE = "FiscalizaGov — Radar do Executivo"
 
-# Endpoint que costuma funcionar para leitura por data e seção.
-# Observação: a Imprensa Nacional pode mudar formatos. O coletor abaixo é resiliente e retorna vazio se falhar.
-IN_LEITURAJORNAL_URL = "https://www.in.gov.br/leiturajornal"
-
 # ============================================================
-# UTILITÁRIOS
+# UTILITARIOS
 # ============================================================
-
-def agora_brasilia_str() -> str:
-    """Retorna data/hora (string) no fuso de Brasília (aproximação sem pytz)."""
-    # Streamlit Cloud nem sempre vem com tzdata; evitar dependência.
-    # UTC-3 fixo (suficiente para boletins). Se quiser DST no futuro, use zoneinfo/pytz.
-    now_utc = dt.datetime.utcnow()
-    now_brt = now_utc - dt.timedelta(hours=3)
-    return now_brt.strftime("%d/%m/%Y %H:%M")
-
-def normalize_text(s: str) -> str:
-    if s is None:
-        return ""
-    s = str(s)
-    s = s.strip()
-    return re.sub(r"\s+", " ", s)
 
 def to_csv_bytes(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
+    return df.to_csv(index=False, sep=";").encode("utf-8-sig")
 
 def to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "FiscalizaGov") -> bytes:
-    import io
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
-        workbook = writer.book
         worksheet = writer.sheets[sheet_name[:31]]
 
         # Autoajuste simples de largura
@@ -102,7 +77,8 @@ def telegram_enviar_mensagem(bot_token: str, chat_id: str, mensagem: str, parse_
             return {"ok": True, "message": "Mensagem enviada com sucesso!"}
         return {"ok": False, "error": data.get("description", "Erro desconhecido")}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        # nao usar str(e): a mensagem da excecao inclui a URL com o token do bot
+        return {"ok": False, "error": f"Falha de rede ao falar com o Telegram ({type(e).__name__})."}
 
 def telegram_testar_conexao(bot_token: str, chat_id: str) -> dict:
     msg = (
@@ -113,335 +89,31 @@ def telegram_testar_conexao(bot_token: str, chat_id: str) -> dict:
     )
     return telegram_enviar_mensagem(bot_token, chat_id, msg, parse_mode="HTML")
 
+
 # ============================================================
-# COLETOR DOU (MVP)
+# DADOS DO DOU (coleta em dou.py)
 # ============================================================
 
-def _dou_parse_payload(payload: dict, data_str: str, secao: str) -> List[Dict]:
-    """
-    Tenta extrair itens do payload do leiturajornal.
-    O formato do JSON varia; por isso usamos heurísticas defensivas.
-    """
-    itens = []
-
-    # Heurística 1: listas em chaves comuns
-    candidate_lists = []
-    for key in ["jsonArray", "itens", "items", "data", "conteudo", "materias", "publicacoes", "publicacao"]:
-        v = payload.get(key)
-        if isinstance(v, list):
-            candidate_lists.append(v)
-
-    # Heurística 2: busca profunda em 1 nível
-    if not candidate_lists:
-        for k, v in payload.items():
-            if isinstance(v, dict):
-                for kk, vv in v.items():
-                    if isinstance(vv, list):
-                        candidate_lists.append(vv)
-
-    for lst in candidate_lists:
-        for raw in lst:
-            if not isinstance(raw, dict):
-                continue
-
-            titulo = normalize_text(raw.get("title") or raw.get("titulo") or raw.get("tituloMateria") or raw.get("nome"))
-            ementa = normalize_text(raw.get("ementa") or raw.get("summary") or raw.get("resumo") or raw.get("descricao") or raw.get("texto"))
-            orgao = normalize_text(raw.get("orgao") or raw.get("orgaoPessoa") or raw.get("orgaoPublicador") or raw.get("hierarquia"))
-
-            # Link / ID: varia muito; tentamos montar o melhor possível
-            link = raw.get("url") or raw.get("link") or raw.get("href") or ""
-            if not link:
-                # Alguns retornam um id numérico para a página /-/{id}
-                possible_id = raw.get("id") or raw.get("identificador") or raw.get("idMateria") or raw.get("idPublicacao")
-                if possible_id:
-                    link = f"https://www.in.gov.br/web/dou/-/{possible_id}"
-
-            itens.append({
-                "Data": data_str,
-                "Seção": secao.upper(),
-                "Título": titulo,
-                "Órgão": orgao,
-                "Ementa/Resumo": ementa,
-                "Link": link
-            })
-
-    # Remove itens vazios demais
-    itens = [x for x in itens if (x.get("Título") or x.get("Ementa/Resumo") or x.get("Link"))]
-    return itens
+class ColetaFalhou(Exception):
+    def __init__(self, erros, parcial):
+        super().__init__("; ".join(erros))
+        self.erros = erros
+        self.parcial = parcial
 
 @st.cache_data(ttl=1800, show_spinner=False)
+def _dou_cache(data: dt.date, secoes: tuple) -> pd.DataFrame:
+    # Se algo falhar, levanta excecao: o st.cache_data NAO guarda excecoes,
+    # entao falha nunca fica "presa" no cache por 30 minutos.
+    df, erros = dou.coletar_dou(data, list(secoes))
+    if erros:
+        raise ColetaFalhou(erros, df)
+    return df
 
-def dou_coletar(data: dt.date, secoes: List[str]) -> pd.DataFrame:
-    """
-    Coleta itens do DOU por data e seção usando endpoints públicos da Imprensa Nacional
-    (pesquisa.in.gov.br), sem depender de JavaScript do portal.
-
-    Estratégia (MVP funcional):
-    1) Usa o HTML do "visualiza/index.jsp" para descobrir quantas páginas existem no dia/ seção.
-    2) Baixa PDFs página-a-página via INPDFViewer.
-    3) Extrai texto e detecta "títulos" de atos (PORTARIA/DECRETO/INSTRUÇÃO NORMATIVA etc.)
-       + tenta inferir Órgão pelo cabeçalho mais próximo.
-
-    Observação: isso é um "scanner" pragmático. Ele não reconstrói a matéria inteira
-    nem pega todos os metadados como o JSON interno do portal /web/dou.
-    """
-    # Mapeamento padrão (Imprensa Nacional):
-    # Seção 1: jornal=515; Seção 2: jornal=529; Seção 3: jornal=530
-    mapa_jornal = {"do1": 515, "do2": 529, "do3": 530}
-
-    ddmmyyyy = data.strftime("%d/%m/%Y")
-    ddmmyyyy_url = ddmmyyyy.replace("/", "%2F")
-
-    # Limites (para não "derreter" a app)
-    max_pages = int(os.getenv("DOU_MAX_PAGES", "35"))
-    max_items = int(os.getenv("DOU_MAX_ITEMS", "250"))
-
-    headers = {"User-Agent": "Mozilla/5.0 (FiscalizaGov)"}
-
-    def _get_total_pages(jornal_id: int) -> int:
-        url = f"https://pesquisa.in.gov.br/imprensa/jsp/visualiza/index.jsp?data={ddmmyyyy_url}&jornal={jornal_id}&pagina=1"
-        try:
-            r = requests.get(url, headers=headers, timeout=20)
-            if r.status_code != 200:
-                return 0
-            html = r.text or ""
-            # Exemplos comuns:
-            # "1 de 199"  |  "205 de 326"
-            m = re.search(r"(\d+)\s+de\s+(\d+)", html)
-            if m:
-                return int(m.group(2))
-            # fallback: tenta capturar totalArquivos=NNN
-            m2 = re.search(r"totalArquivos=(\d+)", html)
-            if m2:
-                return int(m2.group(1))
-            return 0
-        except Exception:
-            return 0
-
-    def _pdf_page_text(jornal_id: int, pagina: int) -> str:
-        pdf_url = (
-            "https://pesquisa.in.gov.br/imprensa/servlet/INPDFViewer"
-            f"?captchafield=firstAccess&data={ddmmyyyy_url}&jornal={jornal_id}&pagina={pagina}"
-        )
-        try:
-            r = requests.get(pdf_url, headers=headers, timeout=30)
-            if r.status_code != 200 or not r.content:
-                return ""
-            # Extração de texto do PDF
-            try:
-                from pdfminer.high_level import extract_text
-                return extract_text(io.BytesIO(r.content)) or ""
-            except Exception:
-                # fallback mínimo: tenta PyPDF2 se estiver disponível
-                try:
-                    import PyPDF2
-                    reader = PyPDF2.PdfReader(io.BytesIO(r.content))
-                    return "\n".join([(p.extract_text() or "") for p in reader.pages])
-                except Exception:
-                    return ""
-        except Exception:
-            return ""
-
-    # Detectores de ato (você pode expandir depois)
-    tipos = [
-        "PORTARIA",
-        "PORTARIA DE PESSOAL",
-        "DECRETO",
-        "INSTRUÇÃO NORMATIVA",
-        "INSTRUCAO NORMATIVA",
-        "RESOLUÇÃO",
-        "RESOLUCAO",
-        "LEI",
-        "MEDIDA PROVISÓRIA",
-        "MEDIDA PROVISORIA",
-        "DESPACHO",
-        "ATO",
-        "EDITAL",
-        "AVISO",
-        "EXTRATO",
-        "CHAMAMENTO",
-    ]
-
-    # Heurística de órgão/cabeçalho
-    orgao_keywords = (
-        "PRESIDÊNCIA", "PRESIDENCIA", "MINISTÉRIO", "MINISTERIO", "CASA CIVIL",
-        "AGÊNCIA", "AGENCIA", "SECRETARIA", "AUTARQUIA", "FUNDAÇÃO", "FUNDACAO",
-        "BANCO CENTRAL", "ADVOCACIA-GERAL", "CONTROLADORIA-GERAL"
-    )
-
-    def _is_header(line: str) -> bool:
-        s = line.strip()
-        if len(s) < 4 or len(s) > 90:
-            return False
-        # Maioria em caixa alta (inclui acentos)
-        letters = [c for c in s if c.isalpha()]
-        if not letters:
-            return False
-        upper = sum(1 for c in letters if c.upper() == c)
-        if upper / max(1, len(letters)) < 0.85:
-            return False
-        return any(k in s for k in orgao_keywords)
-
-    def _scan_text_to_items(text: str, secao_label: str, jornal_id: int, pagina: int) -> List[Dict]:
-        items: List[Dict] = []
-        if not text:
-            return items
-
-        # Normaliza linhas
-        lines = [re.sub(r"\s+", " ", ln).strip() for ln in text.splitlines()]
-        lines = [ln for ln in lines if ln]
-
-        current_orgao = ""
-        for i, ln in enumerate(lines):
-            if _is_header(ln):
-                current_orgao = ln
-                continue
-
-            ln_up = ln.upper()
-            if any(ln_up.startswith(t) for t in tipos):
-                titulo = ln.strip()
-
-                # às vezes o título quebra na linha seguinte
-                if i + 1 < len(lines):
-                    nxt = lines[i + 1].strip()
-                    if nxt and len(nxt) < 120 and not nxt.upper().startswith(tuple(tipos)):
-                        # junta se parecer continuação (ex: "Nº 123, DE ...")
-                        if re.search(r"^N[ºO]\.?\s*\d+|^Nº|^NO\s*\d+", nxt.upper()) or "," in nxt:
-                            titulo = f"{titulo} {nxt}"
-
-                # Resumo: pega um pedaço das próximas linhas (sem virar parede de texto)
-                resumo_lines = []
-                for j in range(i + 1, min(i + 8, len(lines))):
-                    if any(lines[j].upper().startswith(t) for t in tipos):
-                        break
-                    resumo_lines.append(lines[j])
-                resumo = " ".join(resumo_lines).strip()
-
-                link_pdf = (
-                    "https://pesquisa.in.gov.br/imprensa/servlet/INPDFViewer"
-                    f"?captchafield=firstAccess&data={ddmmyyyy_url}&jornal={jornal_id}&pagina={pagina}"
-                )
-
-                items.append({
-                    "Data": ddmmyyyy,
-                    "Seção": secao_label,
-                    "Órgão": current_orgao,
-                    "Título": titulo,
-                    "Ementa/Resumo": resumo,
-                    "Link": link_pdf,
-                    "Página": pagina,
-                })
-
-                if len(items) >= 50:  # limite por página (evita explosão)
-                    break
-
-        return items
-
-    all_items: List[Dict] = []
-
-    for sec in secoes:
-        jornal_id = mapa_jornal.get(sec)
-        if not jornal_id:
-            continue
-
-        total_pages = _get_total_pages(jornal_id)
-        if total_pages <= 0:
-            continue
-
-        pages_to_scan = min(total_pages, max_pages)
-
-        for pg in range(1, pages_to_scan + 1):
-            txt = _pdf_page_text(jornal_id, pg)
-            sec_label = {"do1": "DOU 1", "do2": "DOU 2", "do3": "DOU 3"}.get(sec, sec.upper())
-            items_pg = _scan_text_to_items(txt, sec_label, jornal_id, pg)
-            if items_pg:
-                all_items.extend(items_pg)
-                if len(all_items) >= max_items:
-                    break
-
-        if len(all_items) >= max_items:
-            break
-
-    if not all_items:
-        return pd.DataFrame(columns=["Data", "Seção", "Órgão", "Título", "Ementa/Resumo", "Link", "Página"])
-
-    return pd.DataFrame(all_items)
-
-def dou_filtrar(df: pd.DataFrame, termos: List[str]) -> pd.DataFrame:
-    if df.empty:
-        return df
-    if not termos:
-        return df
-    termos = [t.strip().lower() for t in termos if t.strip()]
-    if not termos:
-        return df
-
-    blob = (
-        df["Título"].fillna("").astype(str) + " " +
-        df["Ementa/Resumo"].fillna("").astype(str) + " " +
-        df["Órgão"].fillna("").astype(str)
-    ).str.lower()
-
-    mask = False
-    for t in termos:
-        mask = mask | blob.str.contains(re.escape(t), na=False)
-    return df[mask].copy()
-
-def score_dou_row(row: pd.Series, termos_alerta: List[str]) -> Tuple[int, List[str]]:
-    """
-    Score simples (0–100) baseado em termos de risco/temas.
-    Ajuste livre: esta é a 'primeira versão' do motor.
-    """
-    texto = f"{row.get('Título','')} {row.get('Ementa/Resumo','')} {row.get('Órgão','')}".lower()
-    score = 10
-    motivos = []
-
-    gatilhos = {
-        "imposto": 25,
-        "tribut": 25,
-        "contribui": 18,
-        "taxa": 18,
-        "benefício": 18,
-        "programa": 12,
-        "fica instituído": 22,
-        "fica criado": 22,
-        "regulamenta": 18,
-        "dispõe sobre": 12,
-        "autoriza": 15,
-        "estabelece": 10,
-        "prorroga": 8,
-        "excepcional": 10,
-        "em caráter": 10
-    }
-
-    for k, pts in gatilhos.items():
-        if k in texto:
-            score += pts
-            motivos.append(k)
-
-    for t in termos_alerta:
-        if t and t.lower() in texto:
-            score += 12
-            motivos.append(f"match:{t.lower()}")
-
-    score = max(0, min(100, score))
-    return score, motivos[:8]
-
-def dou_rankear(df: pd.DataFrame, termos_alerta: List[str]) -> pd.DataFrame:
-    if df.empty:
-        return df
-    scores = []
-    motivos_list = []
-    for _, row in df.iterrows():
-        sc, mot = score_dou_row(row, termos_alerta)
-        scores.append(sc)
-        motivos_list.append(", ".join(mot))
-    out = df.copy()
-    out["Score"] = scores
-    out["Motivos"] = motivos_list
-    out = out.sort_values(["Score", "Data"], ascending=[False, False])
-    cols = ["Score", "Motivos"] + [c for c in out.columns if c not in ["Score", "Motivos"]]
-    return out[cols]
+def carregar_dou(data: dt.date, secoes: List[str]):
+    try:
+        return _dou_cache(data, tuple(secoes)), []
+    except ColetaFalhou as e:
+        return e.parcial, e.erros
 
 # ============================================================
 # UI — ACESSO RESTRITO (igual monitor)
@@ -457,9 +129,13 @@ if not st.session_state.autenticado:
 
     if senha:
         try:
-            senha_ok = (senha == st.secrets["auth"]["senha"])
+            senha_correta = st.secrets["auth"]["senha"]
         except Exception:
-            senha_ok = (senha == os.getenv("FISCALIZAGOV_SENHA", ""))
+            senha_correta = os.getenv("FISCALIZAGOV_SENHA", "")
+        # sem senha configurada, ninguem entra (evita aceitar senha vazia)
+        senha_ok = bool(senha_correta) and hmac.compare_digest(
+            senha.encode("utf-8"), str(senha_correta).encode("utf-8")
+        )
 
         if senha_ok:
             st.session_state.autenticado = True
@@ -483,8 +159,11 @@ st.caption(f"🕒 Atualizado em {agora_brasilia_str()} (horário de Brasília)."
 st.sidebar.header("⚙️ Configurações")
 st.sidebar.write("Filtros gerais (MVP: DOU).")
 
-data_ref = st.sidebar.date_input("Data do DOU", value=dt.date.today())
-secoes = st.sidebar.multiselect("Seções do DOU", DEFAULT_SECOES_DOU, default=DEFAULT_SECOES_DOU)
+data_ref = st.sidebar.date_input("Data do DOU", value=dou.hoje_brasilia())
+secoes = st.sidebar.multiselect(
+    "Seções do DOU", SECOES_DISPONIVEIS, default=DEFAULT_SECOES_DOU,
+    format_func=lambda s: dou.ROTULOS_SECAO.get(s, s),
+)
 
 termos_busca = st.sidebar.text_area(
     "Palavras-chave (busca)",
@@ -521,7 +200,7 @@ with c2:
 # ABAS
 # ============================================================
 
-tabs = st.tabs([
+TAB_NOMES = [
     "🏠 Visão Geral",
     "📜 DOU Inteligente (MVP)",
     "💸 Gastos Diretos (placeholder)",
@@ -531,16 +210,28 @@ tabs = st.tabs([
     "🎁 Programas (placeholder)",
     "🏗️ Obras (placeholder)",
     "🚨 Alertas & Evidências (placeholder)",
-])
+]
+tabs = st.tabs(TAB_NOMES)
 
 # ============================================================
 # DADOS — DOU
 # ============================================================
 
 with st.spinner("Coletando DOU (Imprensa Nacional)..."):
-    df_dou = dou_coletar(data_ref, secoes)
-    df_dou_f = dou_filtrar(df_dou, termos_busca_list)
-    df_dou_rank = dou_rankear(df_dou_f, termos_alerta_list) if not df_dou_f.empty else df_dou_f
+    df_dou, erros_coleta = carregar_dou(data_ref, secoes)
+    df_dou_f = dou.filtrar(df_dou, termos_busca_list)
+    df_dou_rank = dou.rankear(df_dou_f, termos_alerta_list) if not df_dou_f.empty else df_dou_f
+
+if erros_coleta:
+    st.error(
+        "⚠️ **Falha na coleta do DOU.** Os resultados abaixo podem estar incompletos "
+        "e a ausência de itens **não** significa ausência de atos.\n\n"
+        + "\n".join(f"- {e}" for e in erros_coleta)
+    )
+elif df_dou.empty and secoes:
+    st.info("Nenhuma publicação nas seções escolhidas nesta data (dia sem edição ou edição ainda não publicada).")
+else:
+    st.caption(f"📊 {len(df_dou)} atos coletados; {len(df_dou_f)} com as palavras-chave de busca.")
 
 # ============================================================
 # ABA 1 — VISÃO GERAL
@@ -614,15 +305,16 @@ with tabs[1]:
             if not bot_token or not chat_id:
                 st.error("Preencha BOT_TOKEN e CHAT_ID na sidebar.")
             else:
+                esc = lambda k: html.escape(str(row.get(k, "")))
                 msg = (
                     f"🔎 <b>{APP_TITLE}</b>\n"
                     f"🕒 {agora_brasilia_str()}\n\n"
-                    f"📜 <b>DOU</b> — {row.get('Seção','')}\n"
-                    f"🏛️ <b>Órgão:</b> {row.get('Órgão','')}\n"
-                    f"⭐ <b>Score:</b> {row.get('Score','')} ({row.get('Motivos','')})\n\n"
-                    f"<b>{row.get('Título','')}</b>\n\n"
-                    f"{row.get('Ementa/Resumo','')}\n\n"
-                    f"{row.get('Link','')}"
+                    f"📜 <b>DOU</b> — {esc('Seção')}\n"
+                    f"🏛️ <b>Órgão:</b> {esc('Órgão')}\n"
+                    f"⭐ <b>Score:</b> {esc('Score')} ({esc('Motivos')})\n\n"
+                    f"<b>{esc('Título')}</b>\n\n"
+                    f"{esc('Ementa/Resumo')[:1500]}\n\n"
+                    f"{esc('Link')}"
                 )
                 res = telegram_enviar_mensagem(bot_token, chat_id, msg, parse_mode="HTML")
                 if res.get("ok"):
@@ -642,7 +334,7 @@ placeholder_text = (
 
 for i in range(2, len(tabs)):
     with tabs[i]:
-        st.subheader(tabs[i]._label)  # type: ignore[attr-defined]
+        st.subheader(TAB_NOMES[i])
         st.info(placeholder_text)
 
 # ============================================================
@@ -659,9 +351,9 @@ if enviar_top:
         linhas = []
         for _, r in top5.iterrows():
             linhas.append(
-                f"• <b>{r.get('Título','')}</b>\n"
-                f"  🏛️ {r.get('Órgão','')} | ⭐ {r.get('Score','')}\n"
-                f"  {r.get('Link','')}"
+                f"• <b>{html.escape(str(r.get('Título','')))}</b>\n"
+                f"  🏛️ {html.escape(str(r.get('Órgão','')))} | ⭐ {r.get('Score','')}\n"
+                f"  {html.escape(str(r.get('Link','')))}"
             )
         msg = (
             f"🔔 <b>{APP_TITLE}</b>\n"

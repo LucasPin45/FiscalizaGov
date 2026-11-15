@@ -1,8 +1,5 @@
 streamlit
 requests
 pandas
-python-dotenv
-openpyxl
 xlsxwriter
-pdfminer.six
-PyPDF2
+tzdata
