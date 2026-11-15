@@ -50,6 +50,7 @@ details.fg-em[open] summary{display:none}
 .fg-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
 .fg-chip{font-size:11px;padding:0 8px;border-radius:999px;background:rgba(128,128,128,.18)}
 .fg-chip-a{background:rgba(26,110,245,.18);color:#1a6ef5;font-weight:600}
+.fg-chip-w{background:rgba(183,121,31,.2);color:#b7791f;font-weight:600}
 .fg-dia{font-size:1.1rem;font-weight:700;margin:1rem 0 .4rem}
 </style>
 """
@@ -114,13 +115,39 @@ def html_card(row) -> str:
             f'<div class="fg-tit">{titulo}</div>{org_html}{ementa_html}{chips}</div>')
 
 
-def render_cards(df: pd.DataFrame, limite: int, key: str) -> None:
-    """Mostra `limite` cards e um botao para ver mais."""
+def card_generico(score, titulo: str, link: str, tipo: str, meta: str, linhas: List[str],
+                  texto: str = "", chips: List[str] = ()) -> str:
+    """Card no mesmo padrao do DOU, para outras fontes (contratos, dispensas...)."""
+    nivel = dou.nivel_relevancia(score)
+    cor = COR_NIVEL[nivel]
+    tit = e(titulo) or "(sem título)"
+    if link:
+        tit = f'<a href="{e(link)}" target="_blank" title="Abrir na fonte oficial">{tit} ↗</a>'
+    selo = f'<span class="fg-badge" style="background:{cor}">{nivel.upper()} · {e(score)}</span>'
+    tipo_html = f'<span class="fg-tipo">{e(tipo)}</span>' if tipo else ""
+    linhas_html = "".join(f'<div class="fg-org">{e(x)}</div>' for x in linhas if x)
+    texto_html = ""
+    if texto:
+        if len(texto) > EMENTA_CURTA:
+            texto_html = (f'<details class="fg-em"><summary>{e(texto[:EMENTA_CURTA])}… <b>ver mais</b></summary>'
+                          f'{e(texto)}</details>')
+        else:
+            texto_html = f'<div class="fg-em">{e(texto)}</div>'
+    chips_html = ""
+    if chips:
+        chips_html = '<div class="fg-chips">' + "".join(f'<span class="fg-chip fg-chip-w">⚠️ {e(c)}</span>' for c in chips) + "</div>"
+    return (f'<div class="fg-card" style="--fg-cor:{cor}"><div class="fg-top">{selo}{tipo_html}'
+            f'<span class="fg-sec">{e(meta)}</span></div><div class="fg-tit">{tit}</div>'
+            f'{linhas_html}{texto_html}{chips_html}</div>')
+
+
+def render_cards(df: pd.DataFrame, limite: int, key: str, card=html_card) -> None:
+    """Mostra `limite` cards e um botao para ver mais. `card(row)` devolve o HTML."""
     if df.empty:
         return
     mostrar = st.session_state.get(f"{key}_n", limite)
     for _, row in df.head(mostrar).iterrows():
-        st.markdown(html_card(row), unsafe_allow_html=True)
+        st.markdown(card(row), unsafe_allow_html=True)
     if len(df) > mostrar:
         if st.button(f"Mostrar mais ({len(df) - mostrar} restantes)", key=f"{key}_mais"):
             st.session_state[f"{key}_n"] = mostrar + limite

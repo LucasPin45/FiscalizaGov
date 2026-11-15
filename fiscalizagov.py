@@ -19,6 +19,7 @@ import streamlit as st
 import dou
 import ui
 import notificar_fiscalizagov as notif
+import tab_contratos
 
 APP_TITLE = "FiscalizaGov — Radar do Executivo"
 
@@ -225,11 +226,12 @@ st.markdown("---")
 # ABAS
 # ============================================================
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab_pncp, tab5, tab6 = st.tabs([
     "1️⃣ Apresentação",
     "2️⃣ Achados do DOU",
     "3️⃣ Buscar no DOU",
     "4️⃣ Órgãos e tipos de ato",
+    "🧾 Licitações e contratos",
     "📨 Notificações Telegram",
     "🚧 Em construção",
 ])
@@ -350,6 +352,12 @@ with tab4:
                      use_container_width=True)
 
 # ------------------------------------------------------------
+# ABA — LICITAÇÕES E CONTRATOS (PNCP)
+# ------------------------------------------------------------
+with tab_pncp:
+    tab_contratos.render()
+
+# ------------------------------------------------------------
 # ABA 5 — TELEGRAM
 # ------------------------------------------------------------
 with tab5:
@@ -390,7 +398,6 @@ with tab6:
     st.subheader("Próximos módulos")
     st.caption("Ainda não implementados. Cada um cruza o DOU com bases oficiais de controle.")
     st.markdown(
-        "- 🧾 **Licitações e contratos** — PNCP / Compras.gov.br: dispensas, aditivos, contratações emergenciais\n"
         "- 💸 **Gastos diretos** — Portal da Transparência: empenhos e pagamentos\n"
         "- 👔 **Cargos e nomeações** — nomeações e exonerações do DOU por órgão\n"
         "- ✈️ **Viagens e diárias** — Portal da Transparência\n"
