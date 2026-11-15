@@ -1,11 +1,13 @@
 # tab_contratos.py - aba "Licitações e contratos" (PNCP, Executivo federal)
 import datetime as dt
+import os
 
 import pandas as pd
 import streamlit as st
 
 import dou
 import pncp
+import sancoes
 import ui
 
 
@@ -59,6 +61,50 @@ def card_dispensa(r) -> str:
         r["Objeto"], [c for c in r["Pontos de atenção"].split(" | ") if c])
 
 
+def _chave_api() -> str:
+    try:
+        return str(st.secrets["TRANSPARENCIA_API_KEY"])
+    except Exception:
+        return os.getenv("TRANSPARENCIA_API_KEY", "")
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _sancoes_cnpj(cnpj: str, _chave: str) -> list:
+    # `_chave` fica fora da chave de cache. Erro não é guardado: falha nunca vira "sem sanção".
+    return sancoes.consultar_cnpj(cnpj, _chave)
+
+
+def _bloco_sancoes(df: pd.DataFrame, chave: str) -> pd.DataFrame:
+    """Cruza os fornecedores com CEIS/CNEP sob demanda e soma os pontos de atenção."""
+    k_mapa, k_err = f"sc_{chave}", f"sc_err_{chave}"
+    mapa = st.session_state.get(k_mapa, {})
+    with st.expander("🚫 Cruzar fornecedores com CEIS/CNEP (empresas sancionadas)", expanded=bool(mapa)):
+        api = _chave_api()
+        if not api:
+            st.warning("Falta o secret `TRANSPARENCIA_API_KEY` (chave gratuita do Portal da Transparência).")
+        else:
+            st.caption("Consulta o cadastro de empresas punidas (CGU). Vale como **ponto de atenção**: o alcance da "
+                       "sanção varia (impedimento vale só para o ente sancionador; inidoneidade vale para toda a "
+                       "Administração). Confira o tipo e o alcance mostrados no card.")
+            n = st.slider("Fornecedores a verificar (os de maior atenção e valor primeiro)", 10, 150, 50, 10, key="sc_n")
+            cand = df[df["Documento"].str.len() == 14]["Documento"].drop_duplicates().head(n).tolist()
+            st.caption(f"{len(cand)} CNPJs · cerca de {max(1, round(len(cand) * 2 / 60))} min (limite da API do Portal).")
+            if st.button("🚫 Verificar sanções", key=f"sc_btn_{chave}", disabled=not cand):
+                barra = st.progress(0.0, text="Consultando CEIS e CNEP…")
+                novo, erros = sancoes.verificar(
+                    cand, api, progresso=lambda i, t: barra.progress(i / t, text=f"Consultando CEIS e CNEP… {i}/{t}"),
+                    consultar=lambda c: _sancoes_cnpj(c, api))
+                st.session_state[k_mapa] = {**mapa, **novo}
+                st.session_state[k_err] = erros
+                st.rerun()
+        for er in st.session_state.get(k_err, [])[:5]:
+            st.error(f"⚠️ Consulta incompleta: {er}")
+        if mapa:
+            vig = sum(1 for s in mapa.values() if s)
+            st.success(f"{len(mapa)} fornecedores verificados · {vig} com algum registro no CEIS/CNEP.")
+    return sancoes.aplicar_sancoes(df, mapa) if mapa else df
+
+
 def render() -> None:
     st.subheader("Licitações e contratos")
     st.caption("Executivo federal · Fonte: PNCP (Portal Nacional de Contratações Públicas). "
@@ -100,16 +146,17 @@ def render() -> None:
 
     col_valor = "Valor" if contratos else "Valor estimado"
     df = df.copy()
-    df["Nível"] = df["Score"].map(dou.nivel_relevancia)
 
     if contratos:
-        cb1, cb2 = st.columns([1, 1])
-        com_empenho = cb1.checkbox("Incluir empenhos", value=False, key="pn_empenho",
-                                   help="Empenhos são a maioria dos registros (compras pequenas). Ficam ocultos por padrão.")
+        com_empenho = st.checkbox("Incluir empenhos", value=False, key="pn_empenho",
+                                  help="Empenhos são a maioria dos registros (compras pequenas). Ficam ocultos por padrão.")
         df = df if com_empenho else df[df["Tipo"] != "Empenho"]
+        df = _bloco_sancoes(df, chave)
     else:
         st.caption("Dispensa e inexigibilidade são contratações **sem licitação**. São legais nas hipóteses da lei; "
                    "o que vale conferir é o enquadramento e o valor.")
+
+    df["Nível"] = df["Score"].map(dou.nivel_relevancia)
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
