@@ -64,9 +64,10 @@ def _enviar_ou_falhar(bot_token: str, chat_id: str, msg: str) -> None:
 
 def montar_mensagem_achados(df, data: dt.date, total_analisados: int) -> str:
     linhas = []
-    for _, r in df.head(5).iterrows():
+    top = dou.top_diverso(df, 5, 2)  # no maximo 2 atos por orgao
+    for _, r in top.iterrows():
         titulo = html.escape(str(r.get("Título", "")))
-        orgao = html.escape(str(r.get("Órgão", "")))
+        orgao = html.escape(dou.orgao_curto(r.get("Órgão", ""), 70))
         motivos = html.escape(str(r.get("Motivos", "")))
         link = html.escape(str(r.get("Link", "")))
         linhas.append(
@@ -78,7 +79,7 @@ def montar_mensagem_achados(df, data: dt.date, total_analisados: int) -> str:
         "🔎 <b>FiscalizaGov</b>\n"
         f"🕒 {dou.agora_brasilia_str()} | DOU de {data.strftime('%d/%m/%Y')}\n"
         f"📊 {total_analisados} atos analisados, {len(df)} com os termos monitorados\n\n"
-        "🏷️ <b>TOP 5 (por relevância temática)</b>\n\n" + "\n\n".join(linhas)
+        "🏷️ <b>TOP 5 (por relevância temática, máx. 2 por órgão)</b>\n\n" + "\n\n".join(linhas)
     )
 
 
