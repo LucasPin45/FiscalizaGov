@@ -1,0 +1,21 @@
+{
+ "ano": 2026,
+ "gasto": {
+  "amortizacao_liquidada": 1837233460442.8499,
+  "asof": "2026-11-13",
+  "asof_ms": 1794538800000,
+  "gasto_empenhado": 3546732805366.8896,
+  "gasto_liquidado": 3168343478642.9404,
+  "juros_liquidado": 498598763850.22003
+ },
+ "gerado_em": "15/11/2026 18:50",
+ "inicio_ano_ms": 1767236400000,
+ "receita": {
+  "arrecadacao": 2934617758771.4,
+  "asof": "2026-11-13",
+  "asof_ms": 1794538800000,
+  "credito": 2165440615121.4302,
+  "mesmo_periodo_ano_anterior": 2681940994275.84,
+  "refinanciamento": 1502341453701.44
+ }
+}
