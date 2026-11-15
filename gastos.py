@@ -64,6 +64,10 @@ ORGAOS_SUPERIORES: Dict[str, str] = {
 }
 # Fora do ranking por padrao: nao sao gasto proprio de um ministerio.
 NAO_FINALISTICOS = {"71000", "73000", "74000", "75000", "90000"}
+# Administracao direta da Fazenda (Tesouro Nacional): concentra, entre outros, o servico da divida
+# publica (juros e amortizacao), que nao e gasto de custeio do ministerio. Em 2026 ela sozinha
+# passa de R$ 2 tri e esconderia todos os outros orgaos no ranking.
+NAO_FINALISTICOS_ORGAOS = {"25000"}
 
 COLUNAS = ["Ano", "Órgão superior", "Cód. superior", "Órgão", "Cód. órgão", "Empenhado", "Liquidado", "Pago"]
 METRICAS = ["Pago", "Liquidado", "Empenhado"]
@@ -164,7 +168,7 @@ def coletar_ano(ano: int, chave: str, session=None, progresso=None, codigos: Opt
 def filtrar_finalisticos(df: pd.DataFrame, incluir_encargos: bool) -> pd.DataFrame:
     if df.empty or incluir_encargos:
         return df
-    return df[~df["Cód. superior"].isin(NAO_FINALISTICOS)]
+    return df[~df["Cód. superior"].isin(NAO_FINALISTICOS) & ~df["Cód. órgão"].isin(NAO_FINALISTICOS_ORGAOS)]
 
 
 def ranking_superiores(df: pd.DataFrame, metrica: str) -> pd.DataFrame:
