@@ -20,6 +20,7 @@ import dou
 import ui
 import notificar_fiscalizagov as notif
 import tab_contratos
+import tab_gastos
 
 APP_TITLE = "FiscalizaGov — Radar do Executivo"
 
@@ -226,8 +227,9 @@ st.markdown("---")
 # ABAS
 # ============================================================
 
-tab1, tab2, tab3, tab4, tab_pncp, tab5, tab6 = st.tabs([
+tab1, aba_gastos, tab2, tab3, tab4, tab_pncp, tab5, tab6 = st.tabs([
     "1️⃣ Apresentação",
+    "💸 Gastos do governo",
     "2️⃣ Achados do DOU",
     "3️⃣ Buscar no DOU",
     "4️⃣ Órgãos e tipos de ato",
@@ -352,6 +354,12 @@ with tab4:
                      use_container_width=True)
 
 # ------------------------------------------------------------
+# ABA — GASTOS DO GOVERNO
+# ------------------------------------------------------------
+with aba_gastos:
+    tab_gastos.render()
+
+# ------------------------------------------------------------
 # ABA — LICITAÇÕES E CONTRATOS (PNCP)
 # ------------------------------------------------------------
 with tab_pncp:
@@ -398,7 +406,6 @@ with tab6:
     st.subheader("Próximos módulos")
     st.caption("Ainda não implementados. Cada um cruza o DOU com bases oficiais de controle.")
     st.markdown(
-        "- 💸 **Gastos diretos** — Portal da Transparência: empenhos e pagamentos\n"
         "- 👔 **Cargos e nomeações** — nomeações e exonerações do DOU por órgão\n"
         "- ✈️ **Viagens e diárias** — Portal da Transparência\n"
         "- 🚫 **Empresas sancionadas** — CEIS/CNEP (CGU) e inidôneas do TCU cruzadas com contratos\n"
