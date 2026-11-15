@@ -20,6 +20,7 @@ import dou
 import ui
 import notificar_fiscalizagov as notif
 import tab_cargos
+import tab_repasses
 import tab_viagens
 import tab_contratos
 import tab_gastos
@@ -229,7 +230,7 @@ st.markdown("---")
 # ABAS
 # ============================================================
 
-tab1, aba_gastos, tab2, tab3, tab4, tab_pncp, aba_cargos, aba_viagens, tab5, tab6 = st.tabs([
+tab1, aba_gastos, tab2, tab3, tab4, tab_pncp, aba_cargos, aba_viagens, aba_obras, tab5, tab6 = st.tabs([
     "1️⃣ Apresentação",
     "💸 Gastos do governo",
     "2️⃣ Achados do DOU",
@@ -238,6 +239,7 @@ tab1, aba_gastos, tab2, tab3, tab4, tab_pncp, aba_cargos, aba_viagens, tab5, tab
     "🧾 Licitações e contratos",
     "👔 Cargos e nomeações",
     "✈️ Viagens e diárias",
+    "🏗️ Obras e programas",
     "📨 Notificações Telegram",
     "🚧 Em construção",
 ])
@@ -382,6 +384,12 @@ with aba_viagens:
     tab_viagens.render()
 
 # ------------------------------------------------------------
+# ABA — OBRAS E PROGRAMAS (repasses da União; SC em destaque)
+# ------------------------------------------------------------
+with aba_obras:
+    tab_repasses.render()
+
+# ------------------------------------------------------------
 # ABA 5 — TELEGRAM
 # ------------------------------------------------------------
 with tab5:
@@ -422,7 +430,7 @@ with tab6:
     st.subheader("Próximos módulos")
     st.caption("Ainda não implementados. Cada um cruza o DOU com bases oficiais de controle.")
     st.markdown(
-        "- 🏗️ **Obras e programas** — acompanhamento de execução\n"
+        "- 🏗️ **Execução física das obras** — Obrasgov.br (a API antiga parou em julho de 2026; falta a nova)\n"
         "- 🚨 **Alertas e evidências** — dossiê por fornecedor ou órgão, com histórico"
     )
 

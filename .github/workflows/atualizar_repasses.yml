@@ -1,0 +1,52 @@
+name: FiscalizaGov - Atualizar obras e programas (semanal)
+
+on:
+  schedule:
+    # domingo, 01:00 Brasília = 04:00 UTC (madrugada: limite da API é maior)
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      ufs:
+        description: "UFs separadas por espaço (vazio = todas, com SC primeiro)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-repasses
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install requests pandas tzdata
+
+      - name: Coletar convênios e contratos de repasse
+        env:
+          TRANSPARENCIA_API_KEY: ${{ secrets.TRANSPARENCIA_API_KEY }}
+          UFS: ${{ github.event.inputs.ufs }}
+        run: python scripts/atualizar_repasses.py $UFS
+
+      - name: Gravar no repositório (só se mudou)
+        if: success() || failure()
+        run: |
+          git config user.name "fiscalizagov-bot"
+          git config user.email "fiscalizagov-bot@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "Sem mudanças."
+          else
+            git commit -m "Atualiza obras e programas (semanal)"
+            git pull --rebase origin main
+            git push
+          fi
