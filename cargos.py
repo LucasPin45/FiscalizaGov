@@ -5,13 +5,16 @@
 # baixado da pagina da materia (texto_completo).
 #
 # Classificacao (explicavel, por regras):
-#   Alta direcao       - decreto presidencial; Ministro de Estado; Secretario-Executivo; Natureza
-#                        Especial (NE/CNE); CCE/FCE 1.17-1.18 e DAS 5-6; presidente, diretor-presidente
-#                        ou diretor-geral de entidade; comandantes.
-#   Direcao intermedia - CCE/FCE 1.15-1.16 e DAS 4; diretor; secretario; superintendente; chefe de gabinete.
+#   Alta direcao       - decreto presidencial com cargo de alta direcao; Ministro de Estado;
+#                        Secretario-Executivo; Natureza Especial (NE/CNE); CCE/FCE de nivel 15 ou mais
+#                        (DAS 5, DAS 6 e NE); presidente, diretor-presidente ou diretor-geral de entidade;
+#                        reitor; comandantes.
+#   Direcao intermedia - CCE/FCE de nivel 13 e 14 (DAS 4); diretor; secretario; superintendente;
+#                        chefe de gabinete; coordenador-geral.
 #   Demais             - o resto (assessores, funcoes gratificadas, servidores de carreira...).
-# A equivalencia CCE/FCE x DAS segue a tabela de transformacao dos cargos (1.18=DAS 6, 1.17=DAS 5,
-# 1.15=DAS 4).
+# EQUIVALENCIA CCE/FCE x DAS: Anexo III da Lei 14.204/2021 (o nivel e o numero depois do ponto: CCE 1.13 e
+# CCE 2.13 sao ambos nivel 13). DAS-1 = CCE-5; DAS-2 = CCE-7; DAS-3 = CCE-10; DAS-4 = CCE-13;
+# DAS-5 = CCE-15; DAS-6 = CCE-17; NE = CCE-18. Niveis intermediarios (ex.: 14) nao tem DAS equivalente.
 #
 # Limites: a leitura de nomes e cargos e por padroes de texto; sempre mostramos o trecho original
 # do ato e o link. Conflito de interesses e nepotismo (Sumula Vinculante 13) NAO sao detectaveis
@@ -64,18 +67,57 @@ def codigo_norm(serie: str, num: str) -> str:
     return f"{serie.upper()}-{num.replace(',', '.')}"
 
 
-def nivel_codigo(serie: str, num: str) -> int:
-    """2 = alta direcao, 1 = intermediaria, 0 = demais. CCE/FCE 1.x e DAS 101.x/N."""
+# Anexo III da Lei 14.204/2021: nivel do CCE/FCE -> DAS equivalente
+DAS_POR_NIVEL = {5: "DAS 1", 7: "DAS 2", 10: "DAS 3", 13: "DAS 4", 15: "DAS 5", 17: "DAS 6", 18: "NE"}
+
+
+def _nivel_cce(num: str) -> Optional[int]:
+    """'1.13' e '2.13' -> 13 (o nivel e o numero depois do ponto); '13' -> 13."""
+    try:
+        return int(num.replace(",", ".").split(".")[-1])
+    except ValueError:
+        return None
+
+
+def equivalente_das(serie: str, num: str) -> str:
+    """Texto do equivalente no DAS, para mostrar entre parenteses: 'DAS 4', 'NE', 'entre DAS 4 e DAS 5'..."""
     serie = serie.upper()
-    n = num.replace(",", ".")
+    if serie == "CNE":
+        return "NE"
+    if serie not in ("CCE", "FCE"):
+        return ""
+    lv = _nivel_cce(num)
+    if lv is None or lv < 1 or lv > 18:
+        return ""
+    if lv in DAS_POR_NIVEL:
+        return DAS_POR_NIVEL[lv]
+    abaixo = [k for k in DAS_POR_NIVEL if k < lv]
+    acima = [k for k in DAS_POR_NIVEL if k > lv]
+    if not abaixo:
+        return "abaixo do DAS 1"
+    return f"entre {DAS_POR_NIVEL[max(abaixo)]} e {DAS_POR_NIVEL[min(acima)]}"
+
+
+def rotulo_codigo(codigo: str) -> str:
+    """'CCE-1.13' -> 'CCE-1.13 (DAS 4)'. Códigos sem equivalente (FG, FCPE, DAS) ficam como estão."""
+    if "-" not in codigo:
+        return codigo
+    serie, num = codigo.split("-", 1)
+    eq = equivalente_das(serie, num)
+    return f"{codigo} ({eq})" if eq else codigo
+
+
+def nivel_codigo(serie: str, num: str) -> int:
+    """2 = alta direcao (DAS 5, DAS 6, NE), 1 = intermediaria (DAS 4), 0 = demais."""
+    serie = serie.upper()
     try:
         if serie in ("CCE", "FCE"):
-            if not n.startswith("1."):
-                return 0  # series 2.x e 3.x: assessoramento e chefias de nivel menor
-            g = int(n.split(".")[1])
-            return 2 if g >= 17 else 1 if g >= 15 else 0
+            g = _nivel_cce(num)
+            if g is None:
+                return 0
+            return 2 if g >= 15 else 1 if g >= 13 else 0
         if serie == "DAS":
-            g = int(n.split(".")[-1]) if "." in n else int(n)
+            g = int(num.replace(",", ".").split(".")[-1])
             return 2 if g >= 5 else 1 if g == 4 else 0
         if serie == "CNE":
             return 2
@@ -252,7 +294,7 @@ def nivel_texto(corpo: str, movs: List[dict], orgao: str = "") -> (int, List[str
         serie, num = c.split("-", 1)
         g = nivel_codigo(serie, num)
         if g:
-            sobe(g, f"{c} ({'alta direção' if g == 2 else 'direção intermediária'})")
+            sobe(g, f"{rotulo_codigo(c)} · {'alta direção' if g == 2 else 'direção intermediária'}")
     ensino = bool(RE_INSTITUICAO_ENSINO.search(orgao))
     for rx, nome in ALTA_RE:
         if re.search(rx, cargos_txt):
@@ -288,7 +330,7 @@ def movimentos_df(analisado: pd.DataFrame) -> pd.DataFrame:
             linhas.append({
                 "Data": r["Data"], "Órgão": r["Órgão"], "Unidade da Presidência": r["Unidade da Presidência"],
                 "Presidência": r["Presidência"], "Decreto presidencial": r["Decreto presidencial"],
-                "Ação": m["acao"], "Nome": m["nome"], "Cargo": m["cargo"], "Códigos": ", ".join(m["codigos"]),
+                "Ação": m["acao"], "Nome": m["nome"], "Cargo": m["cargo"], "Códigos": ", ".join(rotulo_codigo(c) for c in m["codigos"]),
                 "Nível": m.get("nivel", r["Nível"]), "Motivos": " | ".join(m.get("motivos", [])),
                 "Score": m.get("score", r["Score"]),
                 "Substituição": bool(re.search(r"\bsubstitut[oa]s?\b|\binterin[oa]\b", m["cargo"], re.I)),

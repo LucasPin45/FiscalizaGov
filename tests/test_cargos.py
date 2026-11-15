@@ -57,9 +57,24 @@ class TestNivel(unittest.TestCase):
         n, _ = self.nivel("NOMEAR MARIANA ZOCCOLI para exercer o cargo de Secretária de Produção, CCE 1.17, da Secom.")
         self.assertEqual(n, "Alta direção")
 
-    def test_cce_1_15_e_intermediaria(self):
-        n, _ = self.nivel("NOMEAR RAQUEL TEIXEIRA para exercer o cargo de Diretora de Departamento, CCE 1.15, da Secom.")
+    def test_cce_1_15_e_das_5_alta_direcao(self):
+        n, m = self.nivel("NOMEAR RAQUEL TEIXEIRA para exercer o cargo de Diretora de Departamento, CCE 1.15, da Secom.")
+        self.assertEqual(n, "Alta direção")
+        self.assertIn("CCE-1.15 (DAS 5)", m)
+
+    def test_cce_1_13_e_das_4_intermediaria(self):
+        n, m = self.nivel("NOMEAR LUIZA SANTOS para exercer o cargo de Coordenador-Geral, CCE 1.13, da Secom.")
         self.assertEqual(n, "Direção intermediária")
+        self.assertIn("CCE-1.13 (DAS 4)", m)
+
+    def test_nivel_14_e_intermediario_sem_das_equivalente(self):
+        n, m = self.nivel("NOMEAR ANA PAULA LIMA para exercer o cargo de Chefe de Gabinete, CCE 1.14, da Secom.")
+        self.assertEqual(n, "Direção intermediária")
+        self.assertIn("entre DAS 4 e DAS 5", m)
+
+    def test_nivel_10_das_3_nao_e_direcao(self):
+        n, _ = self.nivel("NOMEAR EDILSON DANTAS para exercer o cargo de Coordenador de Projeto, CCE 3.10, da SRI.")
+        self.assertEqual(n, "Demais")
 
     def test_assessor_em_secretaria_nacional_nao_e_secretario(self):
         n, _ = self.nivel("EXONERAR GIANCARLO GAMA do cargo de Assessor da Secretaria Nacional de Habitação, CCE 2.10.",
@@ -93,6 +108,39 @@ class TestNivel(unittest.TestCase):
         self.assertTrue(r["Decreto presidencial"])
         self.assertEqual(r["Nível"], "Direção intermediária")
         self.assertIn("decreto do Presidente", r["Motivos"])
+
+
+class TestEquivalenciaDas(unittest.TestCase):
+    """Anexo III da Lei 14.204/2021: DAS-1=CCE-5, DAS-2=CCE-7, DAS-3=CCE-10, DAS-4=CCE-13, DAS-5=CCE-15,
+    DAS-6=CCE-17, NE=CCE-18. O nível é o número depois do ponto."""
+
+    def test_tabela_oficial(self):
+        eq = {"5": "DAS 1", "7": "DAS 2", "10": "DAS 3", "13": "DAS 4", "15": "DAS 5", "17": "DAS 6", "18": "NE"}
+        for nivel, das in eq.items():
+            self.assertEqual(cargos.equivalente_das("CCE", f"1.{nivel}"), das)
+            self.assertEqual(cargos.equivalente_das("FCE", f"1.{nivel}"), das)
+
+    def test_serie_nao_muda_o_nivel(self):
+        self.assertEqual(cargos.equivalente_das("CCE", "2.13"), "DAS 4")
+        self.assertEqual(cargos.equivalente_das("CCE", "3.15"), "DAS 5")
+
+    def test_rotulo_entre_parenteses(self):
+        self.assertEqual(cargos.rotulo_codigo("CCE-1.13"), "CCE-1.13 (DAS 4)")
+        self.assertEqual(cargos.rotulo_codigo("CCE-1.18"), "CCE-1.18 (NE)")
+        self.assertEqual(cargos.rotulo_codigo("FCE-1.17"), "FCE-1.17 (DAS 6)")
+
+    def test_niveis_sem_equivalente_exato(self):
+        self.assertEqual(cargos.equivalente_das("CCE", "1.14"), "entre DAS 4 e DAS 5")
+        self.assertEqual(cargos.equivalente_das("CCE", "1.16"), "entre DAS 5 e DAS 6")
+        self.assertEqual(cargos.equivalente_das("CCE", "2.02"), "abaixo do DAS 1")
+
+    def test_codigos_sem_equivalencia_ficam_iguais(self):
+        self.assertEqual(cargos.rotulo_codigo("FCPE-1"), "FCPE-1")
+        self.assertEqual(cargos.rotulo_codigo("DAS-101.4"), "DAS-101.4")
+
+    def test_movimentos_df_mostra_equivalencia(self):
+        a = cargos.analisar(pd.DataFrame([ato("NOMEAR LUIZA SANTOS para exercer o cargo de Coordenador-Geral, CCE 1.13, da Secom.")]))
+        self.assertEqual(cargos.movimentos_df(a).iloc[0]["Códigos"], "CCE-1.13 (DAS 4)")
 
 
 class TestSelecao(unittest.TestCase):

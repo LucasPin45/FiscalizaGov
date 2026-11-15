@@ -125,7 +125,7 @@ def render() -> None:
     with k2:
         ui.kpi("🏛️ Presidência e decretos", ui.fmt_num(len(pres)), ui.COR_MEDIA, "inclui decretos do Presidente")
     with k3:
-        ui.kpi("⭐ Alta direção", ui.fmt_num(len(alta)), ui.COR_ALTA, "Ministro, CCE 1.17-1.18, reitor…")
+        ui.kpi("⭐ Alta direção", ui.fmt_num(len(alta)), ui.COR_ALTA, "DAS 5, DAS 6, NE, ministro, reitor…")
     with k4:
         nom = int((mov["Ação"] == "Nomeação").sum())
         exo = int((mov["Ação"] == "Exoneração").sum())
@@ -154,8 +154,8 @@ def render() -> None:
             ui.render_cards(d, 20, key="cg_cards_pres", card=_card)
 
     with sub_alta:
-        st.caption("Ministro de Estado, Secretário-Executivo e Nacional, Natureza Especial, CCE/FCE 1.17 e 1.18 "
-                   "(equivalentes ao DAS 5 e 6), presidentes e diretores-gerais de entidades, reitores e comandantes.")
+        st.caption("Ministro de Estado, Secretário-Executivo e Nacional, Natureza Especial (NE), CCE/FCE de nível 15 ou mais "
+                   "(DAS 5, DAS 6 e NE), presidentes e diretores-gerais de entidades, reitores e comandantes.")
         d = alta
         if d.empty:
             st.info("Nenhuma movimentação de alta direção neste período.")
@@ -206,9 +206,13 @@ def render() -> None:
     with st.expander("📖 Como ler esta aba (e o que ela não faz)"):
         st.markdown(
             "- **Alta direção:** decreto do Presidente com cargo de alta direção; Ministro de Estado; Secretário-Executivo, "
-            "Especial ou Nacional; Natureza Especial; CCE/FCE 1.17 e 1.18 (≈ DAS 5 e 6); presidentes e diretores-gerais "
-            "de entidades; reitores; comandantes das Forças. **Direção intermediária:** CCE/FCE 1.15 e 1.16 (≈ DAS 4), "
-            "diretores, secretários, superintendentes, chefes de gabinete.\n"
+            "Especial ou Nacional; Natureza Especial (NE); CCE/FCE de nível 15 ou mais (DAS 5, DAS 6 e NE); presidentes e "
+            "diretores-gerais de entidades; reitores; comandantes das Forças. **Direção intermediária:** CCE/FCE de nível "
+            "13 e 14 (DAS 4), diretores, secretários, superintendentes, chefes de gabinete.\n"
+            "- **Equivalência com o DAS** (Anexo III da Lei 14.204/2021), mostrada entre parênteses ao lado de cada código: "
+            "CCE/FCE 5 = DAS 1 · 7 = DAS 2 · 10 = DAS 3 · 13 = DAS 4 · 15 = DAS 5 · 17 = DAS 6 · 18 = NE. O nível é o número "
+            "depois do ponto (CCE 1.13 e CCE 2.13 são ambos nível 13). Níveis fora dessa lista não têm DAS equivalente e "
+            "aparecem como \"entre DAS x e DAS y\".\n"
             "- **Substituições:** designação como substituto eventual ou interino não é nomeação; aparece marcada e com nível "
             "no máximo intermediário.\n"
             "- **Leitura automática:** nomes e cargos são lidos do texto do ato por padrões. Em atos com tabelas ou texto "
