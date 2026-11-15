@@ -36,6 +36,23 @@ def _do_armazem(ano: int):
     return None
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _snapshot(ano: int):
+    """Arquivo gerado de madrugada pelo GitHub Actions (data/gastos_AAAA.csv). None se ainda não existe."""
+    return gastos.ler_snapshot(ano)
+
+
+def _obter(ano: int):
+    """(df, origem): coleta feita agora na sessão > snapshot noturno > (None, '')."""
+    ao = _do_armazem(ano)
+    if ao is not None:
+        return ao, "coletado agora"
+    s = _snapshot(ano)
+    if s:
+        return s[0], (f"atualizado em {s[1]}" if s[1] else "snapshot noturno")
+    return None, ""
+
+
 def _coletar(ano: int, chave: str, rotulo: str):
     """Coleta com barra de progresso; so guarda no armazem se completa."""
     barra = st.progress(0.0, text=f"Coletando gastos de {ano}…")
@@ -78,10 +95,6 @@ def render() -> None:
                "**Empenhado** = compromisso assumido · **Liquidado** = entrega reconhecida · **Pago** = dinheiro que saiu.")
 
     api = _chave_api()
-    if not api:
-        st.warning("Falta o secret `TRANSPARENCIA_API_KEY` (chave gratuita do Portal da Transparência).")
-        return
-
     ano_atual = dou.hoje_brasilia().year
     c1, c2 = st.columns([1, 2])
     ano = c1.selectbox("Ano", list(range(ano_atual, ano_atual - 5, -1)), key="gs_ano")
@@ -95,21 +108,25 @@ def render() -> None:
     comparar = c4.checkbox(f"Comparar com {ano - 1}", value=False, key="gs_comparar",
                            help="Dobra o tempo de coleta. O ano em curso é parcial, o anterior é completo.")
 
-    df = _do_armazem(ano)
-    df_ant = _do_armazem(ano - 1) if comparar else None
-    faltam = [a for a, d in ((ano, df), (ano - 1, df_ant if comparar else 0)) if d is None]
+    df, origem = _obter(ano)
+    df_ant, _ = _obter(ano - 1) if comparar else (None, "")
+    faltam = [a for a, d in ((ano, df), (ano - 1, df_ant)) if d is None and (a == ano or comparar)]
     if faltam:
-        n = len(faltam)
-        st.info(f"A coleta percorre cerca de 60 órgãos superiores e leva **1 a 2 minutos por ano** "
-                f"({'2 anos: até 4 minutos' if n == 2 else '1 ano'}). Depois fica guardada por 12 horas.")
-        if not st.button(f"💸 Carregar gastos ({', '.join(str(a) for a in faltam)})", type="primary", key="gs_btn"):
+        st.info("Ainda não há dados guardados para "
+                f"{', '.join(str(a) for a in faltam)}. O carregamento automático roda toda madrugada. "
+                "Você também pode coletar agora: percorre cerca de 60 órgãos superiores e leva "
+                "**1 a 2 minutos por ano**.")
+        if not api:
+            st.warning("Para coletar agora falta o secret `TRANSPARENCIA_API_KEY` (chave gratuita do Portal da Transparência).")
+            return
+        if not st.button(f"💸 Coletar agora ({', '.join(str(a) for a in faltam)})", type="primary", key="gs_btn"):
             return
         erros_total = []
         for a in faltam:
             d, er = _coletar(a, api, "gastos de")
             erros_total += [f"{a} · {x}" for x in er]
             if a == ano:
-                df = d
+                df, origem = d, "coletado agora"
             else:
                 df_ant = d
         if erros_total:
@@ -132,7 +149,8 @@ def render() -> None:
     total = float(base[metrica].sum())
     execucao = float(base["Pago"].sum() / base["Empenhado"].sum() * 100) if base["Empenhado"].sum() else 0.0
     parcial = " (ano em curso, parcial)" if ano == ano_atual else ""
-    st.caption(f"📅 {ano}{parcial} · {ui.fmt_num(len(org))} órgãos em {ui.fmt_num(len(sup))} órgãos superiores")
+    st.caption(f"📅 {ano}{parcial} · {ui.fmt_num(len(org))} órgãos em {ui.fmt_num(len(sup))} órgãos superiores"
+               + (f" · {origem}" if origem else ""))
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
