@@ -37,10 +37,17 @@ def dados_js(p: dict) -> dict:
         "ano": p["ano"], "inicio": p["inicio_ano_ms"],
         "rec": {"acum": r["arrecadacao"], "asof": r["asof_ms"], "asofTxt": r["asof"],
                 "anterior": r.get("mesmo_periodo_ano_anterior"), "credito": r.get("credito", 0),
-                "refin": r.get("refinanciamento", 0)},
+                "refin": r.get("refinanciamento", 0), **_ritmo(r, p["inicio_ano_ms"], r["arrecadacao"])},
         "gas": {"acum": g["gasto_liquidado"], "asof": g["asof_ms"], "asofTxt": g["asof"], "juros": g.get("juros_liquidado", 0),
-                "amort": g.get("amortizacao_liquidada", 0)},
+                "amort": g.get("amortizacao_liquidada", 0), **_ritmo(g, p["inicio_ano_ms"], g["gasto_liquidado"]),
+                "jurosSeg": g.get("juros_por_segundo") or pn.ritmo(g.get("juros_liquidado", 0), p["inicio_ano_ms"], g["asof_ms"])},
     }
+
+
+def _ritmo(s: dict, inicio_ms: int, acumulado: float) -> dict:
+    """Ritmo (R$/s) e sua base ('últimos 30 dias' ou 'média do ano'); arquivos antigos sem esses campos usam a média."""
+    media = s.get("ritmo_ano") or pn.ritmo(acumulado, inicio_ms, s["asof_ms"])
+    return {"ritmo": s.get("ritmo") or media, "ritmoBase": s.get("ritmo_base") or "média do ano", "ritmoAno": media}
 
 
 HTML = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -73,6 +80,7 @@ body{margin:0;font-family:"Source Sans Pro",system-ui,-apple-system,Segoe UI,Rob
   <div class="lin"><span>Por dia</span><b id="r_dia">—</b></div>
   <div class="lin"><span>Por hora</span><b id="r_hora">—</b></div>
   <div class="lin"><span>Por segundo</span><b id="r_seg">—</b></div>
+  <div class="cmp" id="r_base"></div>
   <div class="cmp" id="r_cmp"></div></section>
  <section class="card" style="--c:#ff6b6b"><h3>💸 Gastou</h3><div class="big" id="g_ano">—</div>
   <div class="sub" id="g_sub"></div>
@@ -80,6 +88,8 @@ body{margin:0;font-family:"Source Sans Pro",system-ui,-apple-system,Segoe UI,Rob
   <div class="lin"><span>Por dia</span><b id="g_dia">—</b></div>
   <div class="lin"><span>Por hora</span><b id="g_hora">—</b></div>
   <div class="lin"><span>Por segundo</span><b id="g_seg">—</b></div>
+  <div class="lin"><span>Só de juros da dívida, por segundo</span><b id="g_juros">—</b></div>
+  <div class="cmp" id="g_base"></div>
   <div class="cmp" id="g_cmp"></div></section>
 </div>
 <div class="rod" id="rod"></div>
@@ -98,7 +108,7 @@ const curto = v => {
   return brl(v);
 };
 const dataBR = iso => iso.split('-').reverse().join('/');
-const ritmo = (s) => s.acum / Math.max((s.asof - D.inicio) / 1000, 1);   // R$ por segundo
+const ritmo = s => s.ritmo;   // R$ por segundo: calculado no Python (últimos 30 dias ou média do ano)
 const agora = () => Date.now();
 const estima = (s, t) => s.acum + ritmo(s) * Math.max(t - s.asof, 0) / 1000;
 const segDesdeMeiaNoite = t => { const d = new Date(t - 3 * 3600 * 1000); // Brasília = UTC-3
@@ -111,7 +121,10 @@ function fixos() {
     $(p + '_hora').textContent = curto(r * 3600);
     $(p + '_seg').textContent = brl(r);
     $(p + '_sub').textContent = 'acumulado no ano (estimativa agora) · arquivo da CGU até ' + dataBR(s.asofTxt);
+    const usado = s.ritmoBase.indexOf('últimos') === 0 ? 'média dos ' + s.ritmoBase : s.ritmoBase;
+    $(p + '_base').textContent = 'Ritmo usado: ' + usado + (usado !== 'média do ano' ? ' · média do ano: ' + brl(s.ritmoAno) + '/s' : '');
   }
+  $('g_juros').textContent = brl(D.gas.jurosSeg);
   if (D.rec.anterior) {
     const v = (D.rec.acum / D.rec.anterior - 1) * 100;
     $('r_cmp').textContent = (v >= 0 ? '▲ ' : '▼ ') + nf1.format(Math.abs(v)) + '% sobre o mesmo período de ' + (D.ano - 1) + ' (' + curto(D.rec.anterior) + ')';
