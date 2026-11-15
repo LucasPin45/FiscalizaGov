@@ -10,8 +10,10 @@ import streamlit as st
 import dou
 import gastos
 import segredos
+import tab_orcamento
 import ui
 
+VISAO_RANK = "Quem gasta (ranking)"
 VALIDADE_S = 12 * 3600
 COR = "#1a6ef5"
 COR_ANT = "rgba(128,128,128,.55)"
@@ -105,15 +107,21 @@ def render() -> None:
 
     api = _chave_api()
     ano_atual = dou.hoje_brasilia().year
+    visao = ui.escolha_unica("Visão", [VISAO_RANK, tab_orcamento.VISAO_TIPO, tab_orcamento.VISAO_EXEC], VISAO_RANK,
+                             key="gs_visao")
     c1, c2 = st.columns([1, 2])
     ano = c1.selectbox("Ano", list(range(ano_atual, ano_atual - 5, -1)), key="gs_ano")
     metrica = c2.radio("Medir por", gastos.METRICAS, horizontal=True, key="gs_metrica",
-                       help="Pago é o gasto efetivo. Empenhado mostra o que já está comprometido.")
+                       help="Pago é o gasto efetivo. Empenhado mostra o que já está comprometido. "
+                            "Vale para a visão 'Quem gasta'.") if visao == VISAO_RANK else gastos.METRICAS[0]
     c3, c4 = st.columns(2)
     incluir = c3.checkbox("Incluir Tesouro Nacional (dívida pública), encargos e transferências a estados e municípios",
                           value=False, key="gs_encargos",
                           help="A administração direta da Fazenda (Tesouro) concentra juros e amortização da dívida, que "
                                "passam de R$ 2 tri e escondem os demais órgãos. Ficam fora por padrão.")
+    if visao != VISAO_RANK:
+        tab_orcamento.render(visao, ano, incluir)
+        return
     comparar = c4.checkbox(f"Comparar com {ano - 1}", value=False, key="gs_comparar",
                            help="Dobra o tempo de coleta. O ano em curso é parcial, o anterior é completo.")
 
