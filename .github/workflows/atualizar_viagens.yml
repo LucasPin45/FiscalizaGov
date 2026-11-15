@@ -1,0 +1,50 @@
+name: FiscalizaGov - Atualizar viagens (semanal)
+
+on:
+  schedule:
+    # segunda-feira, 03:00 Brasilia = 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      anos:
+        description: "Anos separados por espaço (vazio = ano atual, e o anterior se faltar)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-viagens
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install requests pandas tzdata
+
+      - name: Gerar resumos de viagens (baixa ~125 a 157 MB por ano)
+        env:
+          ANOS: ${{ github.event.inputs.anos }}
+        run: python scripts/atualizar_viagens.py $ANOS
+
+      - name: Gravar no repositório (só se mudou)
+        run: |
+          git config user.name "fiscalizagov-bot"
+          git config user.email "fiscalizagov-bot@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "Sem mudanças."
+          else
+            git commit -m "Atualiza resumos de viagens (semanal)"
+            git pull --rebase origin main
+            git push
+          fi
