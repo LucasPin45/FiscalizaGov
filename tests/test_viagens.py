@@ -112,13 +112,38 @@ class TestResumos(unittest.TestCase):
               linha(id="3", cpf="***.999.999-**", nome="BIA LIMA", destinos="Manaus/AM", passagens="150.000,00"),
               linha(id="4", nome="Informações protegidas por sigilo", cpf="Informações protegidas por sigilo")]
         r = vg.resumir(avaliado(ls, intl={"3"}))
-        self.assertEqual(sorted(r), sorted(vg.RECURSOS))
+        self.assertEqual(sorted(r), sorted(vg.RECURSOS + vg.EXTRAS))
         org = r["orgao"].iloc[0]
         self.assertEqual((org["viagens"], org["urgentes"], org["internacionais"], org["viajantes"]), (4, 1, 1, 2))
         self.assertNotIn("Informações protegidas por sigilo", set(r["viajantes"]["nome"]))  # sigilo fora do ranking
         self.assertEqual(r["destinos"].iloc[0]["destinos"], "Brasília/DF")
         self.assertEqual(r["alertas"].iloc[0]["id"], "3")  # a mais pontuada abre a lista
         self.assertEqual(set(r["mes"]["mes"]), {3})
+
+
+class TestListasCarasERecentes(unittest.TestCase):
+    def setUp(self):
+        ls = [linha(id="a", ini="05/03/2026", fim="06/03/2026", passagens="500,00"),
+              linha(id="b", ini="20/03/2026", fim="21/03/2026", passagens="50.000,00"),
+              linha(id="c", ini="10/03/2026", fim="11/03/2026", passagens="9.000,00"),
+              linha(id="futura", ini="10/12/2026", fim="11/12/2026", passagens="99.000,00")]
+        self.r = vg.resumir(avaliado(ls), hoje="2026-11-15")
+
+    def test_mais_caras_ordenadas_por_valor(self):
+        self.assertEqual(list(self.r["caras"]["id"]), ["futura", "b", "c", "a"])
+
+    def test_mais_recentes_por_data_e_sem_futuras(self):
+        self.assertEqual(list(self.r["recentes"]["id"]), ["b", "c", "a"])  # a viagem de dezembro ainda não ocorreu
+
+    def test_leitura_tolera_arquivos_antigos_sem_as_listas(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            base_apenas = {k: self.r[k] for k in vg.RECURSOS}
+            vg.salvar(base_apenas, 2026, pasta=pasta, agora="x")
+            dados, _ = vg.ler(2026, base=pasta)
+            self.assertNotIn("caras", dados)
+            vg.salvar(self.r, 2026, pasta=pasta, agora="x")
+            dados2, _ = vg.ler(2026, base=pasta)
+            self.assertIn("recentes", dados2)
 
 
 class TestArquivos(unittest.TestCase):

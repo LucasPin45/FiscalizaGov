@@ -136,29 +136,40 @@ def _tipo(df: pd.DataFrame, ano: int, incluir: bool) -> None:
 # ------------------------------------------------------------
 
 def _execucao(df: pd.DataFrame, ano: int, incluir: bool) -> None:
-    st.markdown("#### 🐢 Quem menos usa o orçamento que tem")
-    st.caption("Mede quanto da **dotação atualizada** (orçamento autorizado) cada órgão já **empenhou** (comprometeu). "
-               "Quanto menor, mais dinheiro parado.")
+    st.markdown("#### 🐢 Quem tem capacidade de gerir o dinheiro que tem?")
+    st.caption("Compara **proporcionalmente** quanto cada órgão consegue empenhar (comprometer) da **dotação atualizada** "
+               "(o orçamento que ele tem autorizado). O ranking principal é em **porcentagem**: um ministério pequeno que "
+               "executa pouco aparece tão mal quanto um grande. O ranking em **reais parados** vem ao lado, porque os dois "
+               "contam histórias diferentes.")
     c1, c2 = st.columns(2)
     nivel = c1.radio("Comparar", ["Órgão ou entidade", "Órgão superior (ministério)"], horizontal=True, key="oc_nivel")
-    ordem = c2.radio("Ordenar por", ["Menor % empenhado", "Maior valor não empenhado"], horizontal=True, key="oc_ordem")
-    escopo = st.selectbox("Tipo de despesa considerado", list(orcamento.ESCOPOS), key="oc_escopo",
+    escopo = c2.selectbox("Tipo de despesa considerado", list(orcamento.ESCOPOS), key="oc_escopo",
                           help="Investimentos é a medida clássica de capacidade de execução; folha de pagamento e "
                                "benefícios executam quase 100% por natureza.")
-    dmin = st.number_input("Dotação mínima (R$ milhões)", min_value=0.0, value=100.0, step=50.0, key="oc_dmin",
-                           help="Esconde órgãos pequenos, onde um valor baixo pesa pouco.")
+    por_orgao = nivel.startswith("Órgão ou")
+    # ministérios: sem corte (os pequenos são justamente os que o ranking em reais esconde); órgãos: corte de 100 mi
+    dmin = st.number_input("Dotação mínima (R$ milhões)", min_value=0.0, value=100.0 if por_orgao else 0.0, step=50.0,
+                           key=f"oc_dmin_{'o' if por_orgao else 'm'}",
+                           help="Esconde órgãos muito pequenos. Em ministérios o padrão é 0, para não deixar de fora "
+                                "os de orçamento pequeno e baixa execução.")
 
-    r = orcamento.execucao(df, "Órgão" if nivel.startswith("Órgão ou") else "Órgão superior", escopo, dmin * 1e6, incluir)
+    rotulo = "Órgão" if por_orgao else "Órgão superior"
+    r = orcamento.execucao(df, rotulo, escopo, dmin * 1e6, incluir)
     if r.empty:
         st.info("Nenhum órgão com esses filtros.")
         return
-    if ordem.startswith("Maior"):
-        r = r.sort_values("Não empenhado (R$)", ascending=False).reset_index(drop=True)
 
     ref = orcamento.fracao_ano(ano, dou.hoje_brasilia())
+    r = r.copy()
+    r["Posição por %"] = r["% empenhado"].rank(method="min", ascending=True).astype(int)
+    r["Posição por R$"] = r["Não empenhado (R$)"].rank(method="min", ascending=False).astype(int)
+    r["Distância do ritmo (p.p.)"] = r["% empenhado"] - ref
+    r["Ritmo"] = pd.cut(r["Distância do ritmo (p.p.)"], [-1000, -30, -15, -5, 1000],
+                        labels=["Muito abaixo do ritmo", "Abaixo do ritmo", "Levemente abaixo", "No ritmo ou acima"]).astype(str)
+
     dot, emp = float(r["Dotação atualizada"].sum()), float(r["Empenhado"].sum())
     nao = float(r["Não empenhado (R$)"].sum())
-    abaixo = int((r["% empenhado"] < ref - 10).sum())
+    abaixo = int((r["Distância do ritmo (p.p.)"] < -15).sum())
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         ui.kpi("📋 Dotação atualizada", _brl(dot), ui.COR_ALERTA, f"{ui.fmt_num(len(r))} órgãos no recorte")
@@ -167,32 +178,54 @@ def _execucao(df: pd.DataFrame, ano: int, incluir: bool) -> None:
     with k3:
         ui.kpi("💤 Não empenhado", _brl(nao), ui.COR_MEDIA, "orçamento autorizado ainda parado")
     with k4:
-        ui.kpi("🚩 Bem abaixo do ritmo", ui.fmt_num(abaixo), ui.COR_ALERTA, "mais de 10 pontos abaixo do ano decorrido")
+        ui.kpi("🚩 Muito abaixo do ritmo", ui.fmt_num(abaixo), ui.COR_ALERTA, "mais de 15 pontos abaixo do ano decorrido")
 
-    rotulo = "Órgão" if nivel.startswith("Órgão ou") else "Órgão superior"
-    top = r.head(20).copy()
-    top["Nome"] = top[rotulo] + (" (" + top["Órgão superior"].str.slice(0, 28) + ")" if rotulo == "Órgão" else "")
-    top["Valor"] = top["% empenhado"].map(_pct) + "  ·  parado " + top["Não empenhado (R$)"].map(_brl)
-    st.markdown("**Os 20 que menos empenharam**" if ordem.startswith("Menor") else "**Os 20 com mais dinheiro parado**")
-    if ordem.startswith("Menor"):
-        _barras(top, "Nome", "% empenhado", "Valor", 34 * len(top) + 50, "% empenhado da dotação", cor=COR_ALERTA,
+    def nome(d):
+        return d[rotulo] + (" (" + d["Órgão superior"].str.slice(0, 26) + ")" if por_orgao else "")
+
+    g1, g2 = st.columns(2)
+    with g1:
+        st.markdown("**Menor % empenhado** — capacidade de gestão")
+        t1 = r.sort_values(["% empenhado", "Dotação atualizada"], ascending=[True, False]).head(15).copy()
+        t1["Nome"] = nome(t1)
+        t1["Valor"] = t1["% empenhado"].map(_pct) + "  ·  dotação " + t1["Dotação atualizada"].map(_brl)
+        _barras(t1, "Nome", "% empenhado", "Valor", 32 * len(t1) + 50, "% empenhado da dotação", cor=COR_ALERTA,
                 regra=ref, dominio=[0, 100], tooltip=["Nome", "Valor"])
-        st.caption(f"Linha tracejada = {_pct(ref)} do ano já decorrido: referência de quanto seria 'normal' empenhar.")
-    else:
-        top["bi"] = top["Não empenhado (R$)"] / 1e9
-        _barras(top, "Nome", "bi", "Valor", 34 * len(top) + 50, "R$ bilhões não empenhados", cor=COR_ALERTA,
-                tooltip=["Nome", "Valor"])
+        st.caption(f"Linha tracejada = {_pct(ref)} do ano já decorrido.")
+    with g2:
+        st.markdown("**Maior dinheiro parado** — em reais")
+        t2 = r.sort_values("Não empenhado (R$)", ascending=False).head(15).copy()
+        t2["Nome"] = nome(t2)
+        t2["Valor"] = t2["Não empenhado (R$)"].map(_brl) + "  ·  " + t2["% empenhado"].map(_pct) + " empenhado"
+        t2["bi"] = t2["Não empenhado (R$)"] / 1e9
+        _barras(t2, "Nome", "bi", "Valor", 32 * len(t2) + 50, "R$ bilhões parados", cor=COR_ALERTA, tooltip=["Nome", "Valor"])
 
+    # o contraste que motivou este painel: pior em %, mas "escondido" no ranking em reais
+    escondidos = r[(r["Posição por %"] <= 15) & (r["Posição por R$"] > 15)].sort_values("Posição por %").head(8)
+    if not escondidos.empty:
+        st.markdown("**Mal em proporção, mas fora do topo em reais** (o ranking em reais esconderia esses):")
+        for _, x in escondidos.iterrows():
+            st.markdown(f'- **{x[rotulo]}** — {_pct(x["% empenhado"])} empenhado de {_brl(x["Dotação atualizada"])} '
+                        f'(#{x["Posição por %"]} em %, #{x["Posição por R$"]} em reais parados)')
+
+    ordem = st.radio("Ordenar a tabela por", ["Menor % empenhado (capacidade de gestão)", "Maior valor não empenhado"],
+                     horizontal=True, key="oc_ordem")
+    r = r.sort_values(["% empenhado", "Dotação atualizada"], ascending=[True, False]) if ordem.startswith("Menor") \
+        else r.sort_values("Não empenhado (R$)", ascending=False)
+    r = r.reset_index(drop=True)
     tab = r.copy()
     for c in ("Dotação atualizada", "Empenhado", "Liquidado", "Não empenhado (R$)"):
         tab[c] = tab[c].map(_brl)
     for c in ("% empenhado", "% liquidado"):
         tab[c] = tab[c].map(_pct)
+    tab["Distância do ritmo (p.p.)"] = r["Distância do ritmo (p.p.)"].map(lambda v: f"{v:+.1f}".replace(".", ","))
     st.dataframe(tab, use_container_width=True, hide_index=True)
     ui.botoes_download(r, f"fiscalizagov_execucao_{ano}", "oc_dl2")
 
     with st.expander("⚠️ Como ler este ranking (importante)"):
         st.markdown(
+            "- **Em %, todos pesam igual.** Um ministério com R$ 500 mi que empenhou 20% está tão atrás quanto um com R$ 50 bi "
+            "que empenhou 20%. Em reais, só o grande aparece. Por isso os dois rankings ficam lado a lado.\n"
             "- **Baixa execução não prova má gestão.** Pode vir de **bloqueio ou contingenciamento** por decreto, de "
             "dependência de convênios e transferências, de licitações em andamento ou de projetos plurianuais.\n"
             "- **Fundos de crédito** (como FDCO, FDA e FDNE) e fundos que dependem de demanda do mercado têm lógica "

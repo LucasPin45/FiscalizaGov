@@ -103,18 +103,135 @@ def _bloco_sancoes(df: pd.DataFrame, chave: str) -> pd.DataFrame:
     return sancoes.aplicar_sancoes(df, mapa) if mapa else df
 
 
+VISAO_CONTRATOS = "Contratos e aditivos"
+VISAO_DISPENSAS = "Dispensas e inexigibilidades"
+VISAO_EVIDENCIAS = "🚨 Alertas e evidências"
+
+
+def _evidencias(data: dt.date) -> None:
+    """Dossiê do dia: cruza contratos, dispensas/inexigibilidades e sanções por fornecedor e por órgão."""
+    chave = f"pn_ok_e_{data.isoformat()}"
+    if not st.session_state.get(chave):
+        st.info("Cruza, para o dia escolhido, os **contratos** e as **dispensas e inexigibilidades**: quais fornecedores e "
+                "órgãos concentram mais pontos de atenção. Baixa os dois conjuntos do PNCP e leva **2 a 4 minutos**; "
+                "depois fica guardado por 6 horas. Se você já cruzou fornecedores com o CEIS/CNEP na visão de contratos, "
+                "esse resultado entra aqui.")
+        if not st.button("🔎 Montar o painel de evidências", key=f"pn_btn_{chave}", type="primary"):
+            return
+        st.session_state[chave] = True
+
+    with st.spinner("Coletando contratos e dispensas no PNCP (pode levar alguns minutos)…"):
+        dfc, erc = _carregar(_contratos_cache, pncp.avaliar_contratos, data)
+        dfd, erd = _carregar(_dispensas_cache, pncp.avaliar_dispensas, data)
+    erros = erc + erd
+    if erros:
+        st.error("⚠️ **Falha parcial na coleta do PNCP.** O painel pode estar incompleto, e a ausência de um item "
+                 "**não** significa ausência de registros. Tente de novo em instantes.\n\n" + "\n".join(f"- {x}" for x in erros[:6]))
+        if st.button("🔄 Tentar de novo", key=f"pn_retry_{chave}"):
+            st.cache_data.clear()
+            st.rerun()
+    if dfc.empty and dfd.empty:
+        if not erros:
+            st.info("Nenhum registro federal neste dia (fim de semana, feriado ou ainda não publicado).")
+        return
+
+    dfc = dfc[dfc["Tipo"] != "Empenho"].copy()
+    mapa = st.session_state.get(f"sc_pn_ok_c_{data.isoformat()}", {})
+    if mapa and not dfc.empty:
+        dfc = sancoes.aplicar_sancoes(dfc, mapa)
+    dfc["Nível"] = dfc["Score"].map(dou.nivel_relevancia)
+    dfd = dfd.copy()
+    dfd["Nível"] = dfd["Score"].map(dou.nivel_relevancia)
+    atencao_c = dfc[dfc["Score"] >= dou.NIVEL_MEDIO]
+    atencao_d = dfd[dfd["Score"] >= dou.NIVEL_MEDIO]
+    sancionados = dfc[dfc["Pontos de atenção"].str.contains("sanção VIGENTE", na=False)]
+
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        ui.kpi("📄 Contratos com atenção", ui.fmt_num(len(atencao_c)), ui.COR_ALERTA, f"de {ui.fmt_num(len(dfc))} contratos e aditivos")
+    with k2:
+        ui.kpi("⚖️ Dispensas com atenção", ui.fmt_num(len(atencao_d)), ui.COR_MEDIA, f"de {ui.fmt_num(len(dfd))} dispensas e inexigibilidades")
+    with k3:
+        v = float(atencao_c["Valor"].fillna(0).sum() + atencao_d["Valor estimado"].fillna(0).sum())
+        ui.kpi("💰 Valor sob atenção", pncp.fmt_brl(v), "#2e7d32", "média ou alta relevância")
+    with k4:
+        ui.kpi("🚫 Com sanção vigente", ui.fmt_num(len(sancionados)) if mapa else "—", ui.COR_ALTA,
+               "CEIS/CNEP verificado" if mapa else "faça o cruzamento na visão de contratos")
+
+    st.markdown("#### 🏢 Fornecedores com mais evidências")
+    if dfc.empty:
+        st.info("Sem contratos neste dia.")
+    else:
+        g = dfc.groupby(["Fornecedor", "Documento"], as_index=False).agg(
+            Contratos=("Nº PNCP", "size"), Valor=("Valor", "sum"), Score_max=("Score", "max"),
+            Atencao=("Score", lambda s: int((s >= dou.NIVEL_MEDIO).sum())), Orgaos=("Órgão", "nunique"))
+        g["Sanção vigente"] = g["Documento"].isin(sancionados["Documento"])
+        g = g[(g["Score_max"] > 0)].sort_values(["Sanção vigente", "Score_max", "Valor"], ascending=[False, False, False])
+        vis = g.head(30).rename(columns={"Score_max": "Maior score", "Atencao": "Com atenção", "Orgaos": "Órgãos"}).copy()
+        vis["Valor"] = vis["Valor"].map(pncp.fmt_brl)
+        vis["Sanção vigente"] = vis["Sanção vigente"].map({True: "Sim", False: "—"})
+        st.dataframe(vis, use_container_width=True, hide_index=True)
+        opcoes = [f'{r.Fornecedor} ({r.Documento})' for r in g.head(30).itertuples()]
+        if opcoes:
+            sel = st.selectbox("Abrir as evidências de um fornecedor", opcoes, key="pn_ev_forn")
+            doc = sel.rsplit("(", 1)[1].rstrip(")")
+            ui.render_cards(dfc[dfc["Documento"] == doc].sort_values("Score", ascending=False), 10,
+                            key=f"pn_ev_cards_{doc}_{data}", card=card_contrato)
+
+    st.markdown("#### 🏛️ Órgãos com mais evidências (contratos e dispensas)")
+    a = atencao_c.groupby("Órgão").agg(contratos=("Nº PNCP", "size"), valor_c=("Valor", "sum"))
+    b = atencao_d.groupby("Órgão").agg(dispensas=("Nº PNCP", "size"), valor_d=("Valor estimado", "sum"))
+    org = a.join(b, how="outer").fillna(0)
+    if org.empty:
+        st.info("Nenhum órgão com contratos ou dispensas de média ou alta relevância neste dia.")
+    else:
+        org["Valor sob atenção"] = org["valor_c"] + org["valor_d"]
+        org["Itens com atenção"] = org["contratos"] + org["dispensas"]
+        topo = org.sort_values("Valor sob atenção", ascending=False).head(15)
+        st.bar_chart((topo["Valor sob atenção"] / 1e6).rename("R$ milhões sob atenção"), horizontal=True)
+        tab = org.sort_values("Valor sob atenção", ascending=False).reset_index().rename(
+            columns={"contratos": "Contratos", "dispensas": "Dispensas"})
+        tab["Valor sob atenção"] = tab["Valor sob atenção"].map(pncp.fmt_brl)
+        st.dataframe(tab[["Órgão", "Contratos", "Dispensas", "Itens com atenção", "Valor sob atenção"]],
+                     use_container_width=True, hide_index=True)
+
+    st.markdown("#### 🚩 Os registros mais graves do dia")
+    graves = pd.concat([
+        atencao_c.assign(_tipo="c", _score=atencao_c["Score"], _valor=atencao_c["Valor"].fillna(0)),
+        atencao_d.assign(_tipo="d", _score=atencao_d["Score"], _valor=atencao_d["Valor estimado"].fillna(0)),
+    ], ignore_index=True).sort_values(["_score", "_valor"], ascending=[False, False]).head(20)
+    if graves.empty:
+        st.info("Nada com média ou alta relevância neste dia.")
+    else:
+        for _, r in graves.iterrows():
+            st.markdown(card_contrato(r) if r["_tipo"] == "c" else card_dispensa(r), unsafe_allow_html=True)
+
+    with st.expander("📖 Como ler este painel"):
+        st.markdown(
+            "- **Evidência** = ponto de atenção explicável (valor alto, emergência, aditivo acima de 25%, fracionamento, "
+            "inexigibilidade de alto valor, sanção vigente…). Nenhum prova irregularidade; indicam onde olhar primeiro.\n"
+            "- **Fornecedores:** agrupados pelo CNPJ/CPF; a lista abre os contratos de cada um no PNCP.\n"
+            "- **Órgãos:** soma contratos e dispensas/inexigibilidades com relevância média ou alta (35 pontos ou mais).\n"
+            "- **Sanção vigente** só aparece depois do cruzamento com o CEIS/CNEP, na visão de contratos.\n"
+            "- O painel cobre **um dia** de publicação. Cruzamentos com viagens, nomeações e execução do orçamento ficam "
+            "nas abas próprias."
+        )
+
+
 def render() -> None:
     st.subheader("Licitações e contratos")
     st.caption("Executivo federal · Fonte: PNCP (Portal Nacional de Contratações Públicas). "
                "Os pontos de atenção indicam **onde olhar primeiro**; não são conclusão de irregularidade.")
 
-    visao = ui.escolha_unica("Visão", ["Contratos e aditivos", "Dispensas e inexigibilidades"],
-                             "Contratos e aditivos", key="pn_visao")
-    contratos = visao.startswith("Contratos")
+    visao = ui.escolha_unica("Visão", [VISAO_CONTRATOS, VISAO_DISPENSAS, VISAO_EVIDENCIAS], VISAO_CONTRATOS, key="pn_visao")
+    contratos = visao == VISAO_CONTRATOS
 
     hoje = dou.hoje_brasilia()
     data = st.date_input("📅 Data de publicação no PNCP", value=pncp.ultimo_dia_util(hoje), max_value=hoje,
                          format="DD/MM/YYYY", key="pn_data")
+    if visao == VISAO_EVIDENCIAS:
+        _evidencias(data)
+        return
     chave = f"pn_ok_{'c' if contratos else 'd'}_{data.isoformat()}"
 
     if not st.session_state.get(chave):
