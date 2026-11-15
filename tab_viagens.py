@@ -197,8 +197,17 @@ def render() -> None:
             ui.botoes_download(d, f"fiscalizagov_viajantes_{ano}", "vg_dl2")
 
     with t_alertas:
-        st.caption("Viagens com mais pontos de atenção. Cada ponto é uma regra simples, mostrada no card; "
-                   "viagem a serviço é gasto previsto e nada aqui prova irregularidade.")
+        st.caption("Viagens com pontos de atenção, as mais caras do ano ou as mais recentes. Cada ponto é uma regra "
+                   "simples, mostrada no card; viagem a serviço é gasto previsto e nada aqui prova irregularidade.")
+        mapa_listas = {"Maior pontuação": (al_df, "de maior pontuação"),
+                       "Mais caras": (dados.get("caras"), "de maior valor do ano"),
+                       "Mais recentes": (dados.get("recentes"), "mais recentes (por data de início)")}
+        disponiveis = [k for k, (d_, _) in mapa_listas.items() if d_ is not None]
+        lista = ui.escolha_unica("Lista", disponiveis, disponiveis[0], key="vg_lista")
+        if len(disponiveis) < 3:
+            st.caption("As listas “Mais caras” e “Mais recentes” aparecem depois da próxima atualização semanal.")
+        base_df, rotulo_lista = mapa_listas[lista]
+        al_df = base_df
         a = al_df.copy()
         a["score"] = _num(a["score"]).astype(int)
         a["nivel"] = a["score"].map(dou.nivel_relevancia)
@@ -214,13 +223,13 @@ def render() -> None:
         if so_intl:
             a = a[a["internacional"].astype(str) == "True"]
         cA, cB = st.columns([4, 2])
-        cA.caption(f"{ui.fmt_num(len(a))} viagens nos filtros (lista das {ui.fmt_num(len(al_df))} de maior pontuação)")
+        cA.caption(f"{ui.fmt_num(len(a))} viagens nos filtros (lista das {ui.fmt_num(len(al_df))} {rotulo_lista})")
         with cB:
-            ui.botoes_download(a.drop(columns=["nivel"]), f"fiscalizagov_viagens_alertas_{ano}", "vg_dl3")
+            ui.botoes_download(a.drop(columns=["nivel"]), f"fiscalizagov_viagens_{lista.split()[-1].lower()}_{ano}", "vg_dl3")
         if a.empty:
             st.info("Nenhuma viagem com esses filtros.")
         else:
-            ui.render_cards(a, 20, key=f"vg_cards_{sel_sup}_{so_intl}_{'|'.join(niveis)}", card=_card_alerta)
+            ui.render_cards(a, 20, key=f"vg_cards_{lista}_{sel_sup}_{so_intl}_{'|'.join(niveis)}", card=_card_alerta)
 
     with t_dest:
         sig = dest_df[dest_df["destinos"].str.contains("sigilo", case=False)]

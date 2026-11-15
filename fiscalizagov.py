@@ -147,14 +147,14 @@ def telegram_enviar(bot_token: str, chat_id: str, mensagem: str) -> dict:
 # ============================================================
 
 st.title("🔎 FiscalizaGov — Radar do Executivo")
-st.caption("v0.3 · Dados: Diário Oficial da União (Imprensa Nacional) · Horário de Brasília")
+st.caption("Painel de fiscalização do Poder Executivo federal · Horário de Brasília")
 
 col_info, col_btn = st.columns([5, 1])
 with col_info:
-    st.markdown("**Fiscalização do Poder Executivo federal** — atos publicados no DOU, ordenados por relevância temática, "
-                "com link direto para a matéria oficial.")
+    st.markdown("**Para onde vai o dinheiro público e quem decide:** gastos e execução do orçamento, licitações e contratos, "
+                "nomeações, viagens e diárias, obras e repasses. O Diário Oficial da União é uma das fontes, não a única.")
 with col_btn:
-    if st.button("🔄 Atualizar tudo", use_container_width=True, help="Limpa o cache e busca de novo no DOU"):
+    if st.button("🔄 Atualizar tudo", use_container_width=True, help="Limpa o cache e busca de novo (DOU, PNCP, orçamento…)"):
         st.cache_data.clear()
         st.rerun()
 
@@ -165,6 +165,7 @@ with col_btn:
 for k, v in (("fg_busca", BUSCA_PADRAO), ("fg_alerta", ALERTA_PADRAO)):
     st.session_state.setdefault(k, v)
 
+st.caption("📜 Período do **Diário Oficial** (vale para a Apresentação e as abas 2 a 4; as demais abas têm filtros próprios)")
 modo = ui.escolha_unica("Período", ui.PERIODOS, ui.PERIODOS[0], key="fg_periodo")
 faixa = None
 if modo == "Personalizado":
@@ -428,10 +429,10 @@ with tab5:
 # ------------------------------------------------------------
 with tab6:
     st.subheader("Próximos módulos")
-    st.caption("Ainda não implementados. Cada um cruza o DOU com bases oficiais de controle.")
+    st.caption("Ainda não implementados.")
     st.markdown(
         "- 🏗️ **Execução física das obras** — Obrasgov.br (a API antiga parou em julho de 2026; falta a nova)\n"
-        "- 🚨 **Alertas e evidências** — dossiê por fornecedor ou órgão, com histórico"
+        "- 🕘 **Histórico de alertas** — acompanhar o mesmo fornecedor ou órgão ao longo das semanas"
     )
 
 st.markdown("---")

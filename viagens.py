@@ -24,6 +24,8 @@ import requests
 
 SIGILO = "Informações protegidas por sigilo"
 RECURSOS = ["orgao", "mes", "viajantes", "destinos", "alertas"]
+EXTRAS = ["caras", "recentes"]  # listas de viagens (mais caras / mais recentes); opcionais na leitura
+TOP_LISTAS = 1000
 TOP_VIAJANTES = 1500
 TOP_DESTINOS = 300
 TOP_ALERTAS = 1000
@@ -152,8 +154,8 @@ def _soma(g) -> pd.Series:
     })
 
 
-def resumir(v: pd.DataFrame) -> Dict[str, pd.DataFrame]:
-    """v avaliada -> dict com os 5 resumos."""
+def resumir(v: pd.DataFrame, hoje=None) -> Dict[str, pd.DataFrame]:
+    """v avaliada -> dict com os resumos (5 base + listas 'caras' e 'recentes'). `hoje` limita as 'recentes'."""
     orgao = (v.groupby(["cod_sup", "sup", "cod_org", "org"]).apply(_soma, include_groups=False)
              .reset_index().sort_values("total", ascending=False))
     mes = (v[v["mes"] > 0].groupby(["mes", "cod_sup", "sup"])[["diarias", "passagens", "outros", "devolucao", "total"]]
@@ -179,7 +181,16 @@ def resumir(v: pd.DataFrame) -> Dict[str, pd.DataFrame]:
             "viagens_do_viajante", "score", "pontos"]
     alertas = v[v["score"] > 0].nlargest(TOP_ALERTAS, ["score", "total"])[cols].copy()
     alertas["motivo"] = alertas["motivo"].str.slice(0, 200)
-    return {"orgao": orgao, "mes": mes, "viajantes": viajantes, "destinos": destinos, "alertas": alertas}
+
+    # listas por valor e por data (nao dependem de a viagem ter pontos de atencao)
+    hoje_ts = pd.Timestamp(hoje or pd.Timestamp.today().normalize())
+    caras = v.nlargest(TOP_LISTAS, "total")[cols].copy()
+    recentes = v[v["dt_ini"].notna() & (v["dt_ini"] <= hoje_ts)].sort_values(
+        ["dt_ini", "total"], ascending=[False, False]).head(TOP_LISTAS)[cols].copy()
+    for lista in (caras, recentes):
+        lista["motivo"] = lista["motivo"].str.slice(0, 120)
+    return {"orgao": orgao, "mes": mes, "viajantes": viajantes, "destinos": destinos, "alertas": alertas,
+            "caras": caras, "recentes": recentes}
 
 
 def processar(pasta_csv: str, ano: int) -> Dict[str, pd.DataFrame]:
@@ -231,6 +242,17 @@ def ler(ano: int, base: str = "", timeout: int = 40) -> Optional[Tuple[Dict[str,
             else:
                 out[nome] = pd.read_csv(os.path.join(base, f"viagens_{ano}_{nome}.csv"), dtype=_TIPOS,
                                         keep_default_na=False)
+        for nome in EXTRAS:  # opcionais: arquivos antigos (sem elas) continuam funcionando
+            try:
+                if base.startswith("http"):
+                    r = requests.get(f"{base}/viagens_{ano}_{nome}.csv", timeout=timeout)
+                    if r.status_code == 200:
+                        out[nome] = pd.read_csv(io.StringIO(r.text), dtype=_TIPOS, keep_default_na=False)
+                else:
+                    out[nome] = pd.read_csv(os.path.join(base, f"viagens_{ano}_{nome}.csv"), dtype=_TIPOS,
+                                            keep_default_na=False)
+            except (OSError, ValueError, requests.RequestException):
+                pass
         if base.startswith("http"):
             m = requests.get(f"{base}/viagens_meta.json", timeout=timeout)
             meta = m.json() if m.status_code == 200 else {}
