@@ -1,0 +1,44 @@
+name: FiscalizaGov - Atualizar painel de arrecadação e gasto (diário)
+
+on:
+  schedule:
+    # 09:30 Brasília = 12:30 UTC (os arquivos da CGU são atualizados de manhã)
+    - cron: "30 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-painel
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install requests pandas tzdata
+
+      - name: Calcular arrecadação e gasto do ano
+        run: python scripts/atualizar_painel.py
+
+      - name: Gravar no repositório (só se mudou)
+        run: |
+          git config user.name "fiscalizagov-bot"
+          git config user.email "fiscalizagov-bot@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "Sem mudanças."
+          else
+            git commit -m "Atualiza painel de arrecadação e gasto (diário)"
+            git pull --rebase origin main
+            git push
+          fi
