@@ -194,3 +194,51 @@ def ranking_orgaos(df: pd.DataFrame, metrica: str) -> pd.DataFrame:
 def concentracao(ranking: pd.DataFrame, n: int) -> float:
     """% do total concentrado nos n maiores."""
     return float(ranking["% do total"].head(n).sum()) if not ranking.empty else 0.0
+
+
+# ------------------------------------------------------------
+# Snapshot noturno (GitHub Actions grava data/gastos_AAAA.csv; o app so le)
+# ------------------------------------------------------------
+import io as _io
+import json as _json
+import os as _os
+
+PASTA_DADOS = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data")
+URL_DADOS_PADRAO = "https://raw.githubusercontent.com/LucasPin45/FiscalizaGov/main/data"
+
+
+def salvar_snapshot(df: pd.DataFrame, ano: int, pasta: str = PASTA_DADOS, agora: Optional[str] = None) -> None:
+    """Grava o CSV do ano e atualiza data/gastos_meta.json. So chamar com coleta COMPLETA."""
+    _os.makedirs(pasta, exist_ok=True)
+    df.to_csv(_os.path.join(pasta, f"gastos_{ano}.csv"), index=False, encoding="utf-8")
+    meta_path = _os.path.join(pasta, "gastos_meta.json")
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = _json.load(f)
+    except (OSError, ValueError):
+        meta = {}
+    meta[str(ano)] = {"gerado_em": agora or "", "linhas": int(len(df))}
+    with open(meta_path, "w", encoding="utf-8") as f:
+        _json.dump(meta, f, ensure_ascii=False, indent=1, sort_keys=True)
+
+
+def ler_snapshot(ano: int, base: str = "", timeout: int = 30) -> Optional[Tuple[pd.DataFrame, str]]:
+    """Le o snapshot do ano. `base` e uma pasta local ou uma URL (http...). None se nao existir."""
+    base = base or _os.getenv("FISCALIZAGOV_DATA_URL", URL_DADOS_PADRAO)
+    try:
+        if base.startswith("http"):
+            r = requests.get(f"{base}/gastos_{ano}.csv", timeout=timeout)
+            if r.status_code != 200:
+                return None
+            df = pd.read_csv(_io.StringIO(r.text), dtype={"Cód. superior": str, "Cód. órgão": str})
+            m = requests.get(f"{base}/gastos_meta.json", timeout=timeout)
+            meta = m.json() if m.status_code == 200 else {}
+        else:
+            df = pd.read_csv(_os.path.join(base, f"gastos_{ano}.csv"), dtype={"Cód. superior": str, "Cód. órgão": str})
+            with open(_os.path.join(base, "gastos_meta.json"), encoding="utf-8") as f:
+                meta = _json.load(f)
+    except (OSError, ValueError, requests.RequestException):
+        return None
+    if not set(COLUNAS).issubset(df.columns) or df.empty:
+        return None
+    return df[COLUNAS], (meta.get(str(ano)) or {}).get("gerado_em", "")

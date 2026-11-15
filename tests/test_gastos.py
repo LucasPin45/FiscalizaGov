@@ -115,3 +115,32 @@ class TestRanking(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSnapshot(unittest.TestCase):
+    def test_salvar_e_ler_pasta_local(self):
+        import tempfile
+        df = gastos.normalizar([linha(), linha(org="UFX", cod="2")])
+        with tempfile.TemporaryDirectory() as pasta:
+            gastos.salvar_snapshot(df, 2026, pasta=pasta, agora="15/11/2026 04:00")
+            lido, quando = gastos.ler_snapshot(2026, base=pasta)
+            self.assertEqual(quando, "15/11/2026 04:00")
+            self.assertEqual(len(lido), 2)
+            self.assertEqual(lido.iloc[0]["Cód. superior"], "26000")  # zero a esquerda preservado
+            self.assertEqual(lido.iloc[0]["Pago"], 600.0)
+            self.assertIsNone(gastos.ler_snapshot(2025, base=pasta))  # ano sem arquivo
+
+    def test_meta_acumula_anos(self):
+        import json
+        import tempfile
+        df = gastos.normalizar([linha()])
+        with tempfile.TemporaryDirectory() as pasta:
+            gastos.salvar_snapshot(df, 2025, pasta=pasta, agora="a")
+            gastos.salvar_snapshot(df, 2026, pasta=pasta, agora="b")
+            meta = json.load(open(os.path.join(pasta, "gastos_meta.json"), encoding="utf-8"))
+            self.assertEqual(sorted(meta), ["2025", "2026"])
+
+    @mock.patch("gastos.requests.get")
+    def test_url_inexistente_devolve_none(self, get):
+        get.return_value = mock.Mock(status_code=404)
+        self.assertIsNone(gastos.ler_snapshot(2026, base="https://exemplo.test/data"))
