@@ -136,3 +136,70 @@ class TestRelogioHtml(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRitmoRecente(unittest.TestCase):
+    def test_receita_usa_os_ultimos_30_dias(self):
+        ls = [lin("Receitas Correntes", "Contribuições", "A", 3000.0, "05/01/2026"),      # fora da janela
+              lin("Receitas Correntes", "Contribuições", "B", 864000.0 * 30, "20/02/2026"),
+              lin("Receitas de Capital", "Operações de Crédito", "REFIN", 999999.0, "21/02/2026"),   # crédito não conta
+              lin("Receitas Correntes - intra-orçamentárias", "Contribuições", "I", 999999.0, "21/02/2026")]
+        ls += [lin("Receitas Correntes", "Contribuições", "ZERO", 0.0, "05/01/2026") for _ in range(1100)]
+        df = pn.ler_receitas(zip_rec(ls), 2026)
+        r = pn.ritmo_recente_receita(df, pd.Timestamp("2026-02-21"))
+        self.assertAlmostEqual(r, 864000.0 * 30 / (30 * 86400.0))   # R$ 10 por segundo
+        p = pn.montar(2026, df, None, df_orc(), dt.date(2026, 2, 22), "x")
+        self.assertEqual(p["receita"]["ritmo_base"], "últimos 30 dias")
+        self.assertAlmostEqual(p["receita"]["ritmo"], r)
+        self.assertGreater(p["receita"]["ritmo_ano"], 0)
+
+    def test_gasto_comeca_na_media_e_passa_ao_recente(self):
+        rec = pn.ler_receitas(zip_rec(base_receitas()), 2026)
+        p = pn.montar(2026, rec, None, df_orc(), dt.date(2026, 3, 1), "x")
+        self.assertEqual(p["gasto"]["ritmo_base"], "média do ano")
+        with tempfile.TemporaryDirectory() as pasta:
+            h1 = pn.atualizar_historico(p, pasta)
+            self.assertEqual(len(h1), 1)
+            self.assertIsNone(pn.ritmo_gasto_recente(h1))        # um ponto só: sem ritmo recente
+            for dias, valor in ((10, 1_000_000.0), (20, 2_000_000.0)):   # mais dois dias de arquivo
+                q = {"gasto": {"asof": f"2026-03-{1 + dias:02d}", "asof_ms": p["gasto"]["asof_ms"] + dias * 86400 * 1000,
+                               "gasto_liquidado": valor, "gasto_empenhado": valor, "juros_liquidado": 0.0}, "gerado_em": "x"}
+                h = pn.atualizar_historico(q, pasta)
+            rate, dias_usados = pn.ritmo_gasto_recente(h)
+            self.assertAlmostEqual(dias_usados, 20.0)
+            self.assertAlmostEqual(rate, (2_000_000.0 - 600.0) / (20 * 86400.0))
+            pn.aplicar_historico(p, h)
+            self.assertEqual(p["gasto"]["ritmo_base"], "últimos 20 dias")
+
+    def test_historico_nao_duplica_a_mesma_data_e_ignora_janela_curta(self):
+        p = {"gasto": {"asof": "2026-03-01", "asof_ms": 1_000_000_000_000, "gasto_liquidado": 10.0, "gasto_empenhado": 10.0,
+                       "juros_liquidado": 1.0}, "gerado_em": "a"}
+        with tempfile.TemporaryDirectory() as pasta:
+            pn.atualizar_historico(p, pasta)
+            p["gasto"]["gasto_liquidado"] = 12.0
+            h = pn.atualizar_historico(p, pasta)
+            self.assertEqual((len(h), float(h.iloc[0]["gasto_liquidado"])), (1, 12.0))   # substituiu
+            q = {"gasto": dict(p["gasto"], asof="2026-03-02", asof_ms=p["gasto"]["asof_ms"] + 86400 * 1000,
+                               gasto_liquidado=99.0), "gerado_em": "b"}
+            h = pn.atualizar_historico(q, pasta)
+            self.assertIsNone(pn.ritmo_gasto_recente(h))         # só 1 dia de diferença: oscila demais
+
+    def test_html_usa_ritmo_do_painel_e_juros_por_segundo(self):
+        rec = pn.ler_receitas(zip_rec(base_receitas()), 2026)
+        p = pn.montar(2026, rec, None, df_orc(), dt.date(2026, 3, 1), "x")
+        h = relogio.html_relogio(p)
+        dados = json.loads(h.split("const D = ", 1)[1].split(";\nconst nf0", 1)[0])
+        self.assertEqual(dados["rec"]["ritmoBase"], p["receita"]["ritmo_base"])
+        self.assertAlmostEqual(dados["rec"]["ritmo"], p["receita"]["ritmo"])
+        self.assertGreater(dados["gas"]["jurosSeg"], 0)
+        self.assertIn("const ritmo = s => s.ritmo", h)
+
+    def test_snapshot_antigo_sem_ritmo_continua_funcionando(self):
+        rec = pn.ler_receitas(zip_rec(base_receitas()), 2026)
+        p = pn.montar(2026, rec, None, df_orc(), dt.date(2026, 3, 1), "x")
+        for k in ("ritmo", "ritmo_base", "ritmo_ano"):
+            p["receita"].pop(k), p["gasto"].pop(k)
+        p["gasto"].pop("juros_por_segundo")
+        dados = relogio.dados_js(p)
+        self.assertGreater(dados["rec"]["ritmo"], 0)
+        self.assertEqual(dados["rec"]["ritmoBase"], "média do ano")

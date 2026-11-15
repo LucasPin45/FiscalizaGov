@@ -92,6 +92,16 @@ def ler_receitas(conteudo: bytes, ano: int) -> pd.DataFrame:
     return df.groupby(["dt", "intra", "credito", "refin"], as_index=False)["realizado"].sum()
 
 
+JANELA_DIAS = 30  # o ritmo "recente" olha os ultimos 30 dias, como o relogio da divida dos EUA olha a variacao recente
+
+
+def ritmo_recente_receita(df: pd.DataFrame, ultimo: pd.Timestamp, dias: int = JANELA_DIAS) -> float:
+    """Arrecadacao media dos ultimos `dias` dias corridos ate `ultimo` (inclusive), em R$ por segundo."""
+    ini = ultimo - pd.Timedelta(days=dias)
+    base = df[(df["dt"] > ini) & (df["dt"] <= ultimo) & ~df["intra"] & ~df["credito"]]
+    return float(base["realizado"].sum()) / (dias * 86400.0)
+
+
 def somar_receitas(df: pd.DataFrame, ate: Optional[pd.Timestamp] = None) -> Dict[str, float]:
     d = df if ate is None else df[df["dt"] <= ate]
     base = d[~d["intra"]]
@@ -144,13 +154,82 @@ def montar(ano: int, rec_ano: pd.DataFrame, rec_ant: Optional[pd.DataFrame], df_
     asof_gasto = dt.datetime(*(data_despesa or ultimo.date()).timetuple()[:3], tzinfo=BRT)
     if asof_gasto <= dt.datetime(ano, 1, 1, tzinfo=BRT):
         asof_gasto = asof_rec
+    inicio = inicio_do_ano_ms(ano)
+    rit_ano_r = ritmo(rec["arrecadacao"], inicio, _ms(asof_rec))
+    rit_30_r = ritmo_recente_receita(rec_ano, ultimo)
+    rit_ano_g = ritmo(gas["gasto_liquidado"], inicio, _ms(asof_gasto))
+    seg_g = max((_ms(asof_gasto) - inicio) / 1000.0, 1.0)
     return {
         "ano": ano, "gerado_em": agora,
-        "inicio_ano_ms": inicio_do_ano_ms(ano),
+        "inicio_ano_ms": inicio,
         "receita": {**rec, "asof_ms": _ms(asof_rec), "asof": asof_rec.date().isoformat(),
-                    "mesmo_periodo_ano_anterior": anterior},
-        "gasto": {**gas, "asof_ms": _ms(asof_gasto), "asof": asof_gasto.date().isoformat()},
+                    "mesmo_periodo_ano_anterior": anterior,
+                    # ritmo usado pelo contador: ultimos 30 dias (a data de cada lancamento esta no arquivo)
+                    "ritmo": rit_30_r if rit_30_r > 0 else rit_ano_r,
+                    "ritmo_base": f"últimos {JANELA_DIAS} dias" if rit_30_r > 0 else "média do ano",
+                    "ritmo_ano": rit_ano_r},
+        "gasto": {**gas, "asof_ms": _ms(asof_gasto), "asof": asof_gasto.date().isoformat(),
+                  # o arquivo de despesas e acumulado e sem data por lancamento: comeca na media do ano e passa
+                  # ao ritmo recente quando o historico diario (aplicar_historico) tiver pelo menos dois pontos
+                  "ritmo": rit_ano_g, "ritmo_base": "média do ano", "ritmo_ano": rit_ano_g,
+                  "juros_por_segundo": gas["juros_liquidado"] / seg_g},
     }
+
+
+# ------------------------------------------------------------
+# Historico diario do gasto (a rotina noturna acrescenta uma linha por dia)
+# ------------------------------------------------------------
+COLUNAS_HIST = ["asof", "asof_ms", "gasto_liquidado", "gasto_empenhado", "juros_liquidado", "gerado_em"]
+
+
+def ler_historico(pasta: str = "") -> pd.DataFrame:
+    pasta = pasta or PASTA_DADOS
+    try:
+        return pd.read_csv(os.path.join(pasta, "painel_historico.csv"))[COLUNAS_HIST]
+    except (OSError, ValueError, KeyError):
+        return pd.DataFrame(columns=COLUNAS_HIST)
+
+
+def atualizar_historico(p: dict, pasta: str = "", max_linhas: int = 800) -> pd.DataFrame:
+    """Acrescenta (ou substitui) a linha da data do arquivo de despesas e grava data/painel_historico.csv."""
+    pasta = pasta or PASTA_DADOS
+    g = p["gasto"]
+    nova = pd.DataFrame([{"asof": g["asof"], "asof_ms": g["asof_ms"], "gasto_liquidado": g["gasto_liquidado"],
+                          "gasto_empenhado": g["gasto_empenhado"], "juros_liquidado": g["juros_liquidado"],
+                          "gerado_em": p.get("gerado_em", "")}])
+    h = ler_historico(pasta)
+    h = h[h["asof"] != g["asof"]]
+    h = pd.concat([h, nova], ignore_index=True).sort_values("asof_ms").tail(max_linhas).reset_index(drop=True)
+    os.makedirs(pasta, exist_ok=True)
+    h.to_csv(os.path.join(pasta, "painel_historico.csv"), index=False)
+    return h
+
+
+def ritmo_gasto_recente(h: pd.DataFrame, janela: int = JANELA_DIAS) -> Optional[Tuple[float, float]]:
+    """(R$ por segundo, dias usados) entre o ponto mais recente e o mais antigo dentro da janela. None se faltar historico."""
+    if h is None or len(h) < 2:
+        return None
+    h = h.sort_values("asof_ms")
+    ult = h.iloc[-1]
+    # referencia entre 3 e 30 dias antes: com menos de 3 dias o ritmo oscila demais (fim de semana, lotes)
+    dentro = h[(h["asof_ms"] >= ult["asof_ms"] - janela * 86400 * 1000) & (h["asof_ms"] <= ult["asof_ms"] - 3 * 86400 * 1000)]
+    if dentro.empty:
+        return None
+    ref = dentro.iloc[0]
+    dseg = (ult["asof_ms"] - ref["asof_ms"]) / 1000.0
+    delta = float(ult["gasto_liquidado"] - ref["gasto_liquidado"])
+    if dseg <= 0 or delta <= 0:
+        return None
+    return delta / dseg, dseg / 86400.0
+
+
+def aplicar_historico(p: dict, h: pd.DataFrame) -> dict:
+    """Troca o ritmo do gasto pelo recente quando ha historico suficiente."""
+    r = ritmo_gasto_recente(h)
+    if r:
+        p["gasto"]["ritmo"] = r[0]
+        p["gasto"]["ritmo_base"] = f"últimos {r[1]:.0f} dias"
+    return p
 
 
 def ritmo(valor_acumulado: float, inicio_ms: int, asof_ms: int) -> float:

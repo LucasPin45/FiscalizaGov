@@ -19,10 +19,15 @@ def main() -> int:
         print(f"Falhou, arquivo anterior mantido: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
     p["gerado_em"] = dou.agora_brasilia().strftime("%d/%m/%Y %H:%M")
+    # historico diario do gasto: o arquivo de despesas e acumulado e sem data por lancamento, entao o ritmo recente
+    # so existe quando a rotina ja guardou pontos de dias diferentes
+    historico = painel.atualizar_historico(p)
+    painel.aplicar_historico(p, historico)
     painel.salvar(p)
     r, g = p["receita"], p["gasto"]
-    print(f"{ano}: arrecadação R$ {r['arrecadacao']/1e9:,.1f} bi (até {r['asof']}), gasto R$ {g['gasto_liquidado']/1e9:,.1f} bi "
-          f"(arquivo de {g['asof']})")
+    print(f"{ano}: arrecadação R$ {r['arrecadacao']/1e9:,.1f} bi (até {r['asof']}; ritmo {r['ritmo_base']}: R$ {r['ritmo']:,.0f}/s), "
+          f"gasto R$ {g['gasto_liquidado']/1e9:,.1f} bi (arquivo de {g['asof']}; ritmo {g['ritmo_base']}: R$ {g['ritmo']:,.0f}/s), "
+          f"histórico com {len(historico)} ponto(s)")
     return 0
 
 
