@@ -241,3 +241,61 @@ def rankear(df: pd.DataFrame, termos_alerta: List[str]) -> pd.DataFrame:
     out = out.sort_values(["Score"], ascending=[False], kind="stable")
     cols = ["Score", "Motivos"] + [c for c in out.columns if c not in ("Score", "Motivos")]
     return out[cols]
+
+
+# ------------------------------------------------------------
+# Apresentacao: orgao, nivel de relevancia, selecao diversificada
+# ------------------------------------------------------------
+
+def orgao_raiz(hierarquia: str) -> str:
+    """Primeiro nivel da hierarquia (ex.: 'Ministerio da Fazenda')."""
+    return normalize_text(str(hierarquia).split("/")[0]) if hierarquia else ""
+
+
+def orgao_curto(hierarquia: str, limite: int = 90) -> str:
+    """'Ministério X/Secretaria Y/Coordenação Z -> Ministério X › Coordenação Z."""
+    partes = [normalize_text(p) for p in str(hierarquia or "").split("/") if p.strip()]
+    if not partes:
+        return ""
+    txt = partes[0] if len(partes) == 1 else f"{partes[0]} › {partes[-1]}"
+    return txt if len(txt) <= limite else txt[: limite - 1] + "…"
+
+
+NIVEL_ALTO = 60
+NIVEL_MEDIO = 35
+
+
+def nivel_relevancia(score) -> str:
+    try:
+        s = int(score)
+    except (TypeError, ValueError):
+        return "Baixa"
+    return "Alta" if s >= NIVEL_ALTO else "Média" if s >= NIVEL_MEDIO else "Baixa"
+
+
+def top_diverso(df: pd.DataFrame, n: int = 5, max_por_raiz: int = 2) -> pd.DataFrame:
+    """Top n por Score, no maximo `max_por_raiz` por orgao raiz (evita 5 atos do mesmo orgao)."""
+    if df.empty:
+        return df
+    escolhidos, contagem = [], {}
+    for idx, row in df.iterrows():
+        raiz = orgao_raiz(row.get("Órgão", ""))
+        if contagem.get(raiz, 0) >= max_por_raiz:
+            continue
+        contagem[raiz] = contagem.get(raiz, 0) + 1
+        escolhidos.append(idx)
+        if len(escolhidos) >= n:
+            break
+    return df.loc[escolhidos]
+
+
+def ultimo_dia_com_edicao(coletar, hoje: dt.date, max_voltas: int = 6):
+    """Volta de `hoje` ate achar um dia com atos. `coletar(d)` -> (df, erros).
+    Retorna (data, df, erros). Para no primeiro erro (nao mascara falha como dia vazio)."""
+    d = hoje
+    for _ in range(max_voltas + 1):
+        df, erros = coletar(d)
+        if erros or not df.empty:
+            return d, df, erros
+        d -= dt.timedelta(days=1)
+    return hoje, pd.DataFrame(columns=COLUNAS), []
