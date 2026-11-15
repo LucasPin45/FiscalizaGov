@@ -8,6 +8,7 @@ import streamlit as st
 import dou
 import pncp
 import sancoes
+import segredos
 import ui
 
 
@@ -62,10 +63,7 @@ def card_dispensa(r) -> str:
 
 
 def _chave_api() -> str:
-    try:
-        return str(st.secrets["TRANSPARENCIA_API_KEY"])
-    except Exception:
-        return os.getenv("TRANSPARENCIA_API_KEY", "")
+    return segredos.chave_transparencia(st.secrets)
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
