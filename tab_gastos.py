@@ -88,9 +88,10 @@ def render() -> None:
     metrica = c2.radio("Medir por", gastos.METRICAS, horizontal=True, key="gs_metrica",
                        help="Pago é o gasto efetivo. Empenhado mostra o que já está comprometido.")
     c3, c4 = st.columns(2)
-    incluir = c3.checkbox("Incluir encargos da dívida, refinanciamento e transferências a estados e municípios",
+    incluir = c3.checkbox("Incluir Tesouro Nacional (dívida pública), encargos e transferências a estados e municípios",
                           value=False, key="gs_encargos",
-                          help="Esses itens não são gasto próprio de um ministério e distorcem o ranking. Ficam fora por padrão.")
+                          help="A administração direta da Fazenda (Tesouro) concentra juros e amortização da dívida, que "
+                               "passam de R$ 2 tri e escondem os demais órgãos. Ficam fora por padrão.")
     comparar = c4.checkbox(f"Comparar com {ano - 1}", value=False, key="gs_comparar",
                            help="Dobra o tempo de coleta. O ano em curso é parcial, o anterior é completo.")
 
@@ -196,7 +197,8 @@ def render() -> None:
             "Educação e Previdência são grandes por natureza (folha, benefícios, transferências).\n"
             "- **Pago × Empenhado:** a distância entre os dois é dinheiro comprometido e ainda não pago.\n"
             "- **Ano em curso é parcial.** Não compare com o ano fechado como se fosse queda.\n"
-            "- **Encargos da dívida, refinanciamento e transferências a estados e municípios** ficam fora por padrão: "
-            "são fluxos financeiros, não despesa de um ministério.\n"
+            "- **Tesouro Nacional (administração direta da Fazenda), encargos da dívida, refinanciamento e "
+            "transferências a estados e municípios** ficam fora por padrão: são fluxos financeiros, não custeio de um "
+            "ministério. Marque a opção acima para incluí-los.\n"
             "- Os valores vêm da execução orçamentária (SIAFI) e podem ser ajustados depois."
         )

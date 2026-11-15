@@ -85,6 +85,15 @@ class TestRanking(unittest.TestCase):
         self.assertNotIn("Refinanciamento da Dívida", set(base["Órgão superior"]))
         self.assertIn("Refinanciamento da Dívida", set(gastos.filtrar_finalisticos(self.df, True)["Órgão superior"]))
 
+    def test_tesouro_direto_da_fazenda_fica_fora_por_padrao(self):
+        df = gastos.normalizar([
+            linha(sup="Ministério da Fazenda", cod_sup="25000", org="Fazenda - Unidades com vínculo direto",
+                  cod="25000", pago="2.000.000,00"),
+            linha(sup="Ministério da Fazenda", cod_sup="25000", org="Receita Federal", cod="25201", pago="500,00"),
+        ])
+        self.assertEqual(list(gastos.filtrar_finalisticos(df, False)["Órgão"]), ["Receita Federal"])
+        self.assertEqual(len(gastos.filtrar_finalisticos(df, True)), 2)
+
     def test_ranking_superiores_ordena_e_percentuais(self):
         base = gastos.filtrar_finalisticos(self.df, False)
         r = gastos.ranking_superiores(base, "Pago")
