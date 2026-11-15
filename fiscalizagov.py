@@ -19,6 +19,7 @@ import streamlit as st
 import dou
 import ui
 import notificar_fiscalizagov as notif
+import relogio
 import tab_cargos
 import tab_repasses
 import tab_viagens
@@ -249,7 +250,8 @@ tab1, aba_gastos, tab2, tab3, tab4, tab_pncp, aba_cargos, aba_viagens, aba_obras
 # ABA 1 — APRESENTAÇÃO
 # ------------------------------------------------------------
 with tab1:
-    st.subheader("Visão geral do período")
+    relogio.render_apresentacao()  # painel em destaque: arrecadou x gastou, contando por segundo
+    st.subheader("Diário Oficial no período escolhido")
     n_alta = int((df_rank["Nível"] == "Alta").sum()) if not df_rank.empty else 0
     n_media = int((df_rank["Nível"] == "Média").sum()) if not df_rank.empty else 0
     n_org = int(df_rank["Órgão raiz"].nunique()) if not df_rank.empty else 0
