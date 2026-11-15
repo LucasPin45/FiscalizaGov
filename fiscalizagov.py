@@ -19,6 +19,7 @@ import streamlit as st
 import dou
 import ui
 import notificar_fiscalizagov as notif
+import tab_cargos
 import tab_contratos
 import tab_gastos
 
@@ -227,13 +228,14 @@ st.markdown("---")
 # ABAS
 # ============================================================
 
-tab1, aba_gastos, tab2, tab3, tab4, tab_pncp, tab5, tab6 = st.tabs([
+tab1, aba_gastos, tab2, tab3, tab4, tab_pncp, aba_cargos, tab5, tab6 = st.tabs([
     "1️⃣ Apresentação",
     "💸 Gastos do governo",
     "2️⃣ Achados do DOU",
     "3️⃣ Buscar no DOU",
     "4️⃣ Órgãos e tipos de ato",
     "🧾 Licitações e contratos",
+    "👔 Cargos e nomeações",
     "📨 Notificações Telegram",
     "🚧 Em construção",
 ])
@@ -366,6 +368,12 @@ with tab_pncp:
     tab_contratos.render()
 
 # ------------------------------------------------------------
+# ABA — CARGOS E NOMEAÇÕES (DOU)
+# ------------------------------------------------------------
+with aba_cargos:
+    tab_cargos.render()
+
+# ------------------------------------------------------------
 # ABA 5 — TELEGRAM
 # ------------------------------------------------------------
 with tab5:
@@ -406,9 +414,7 @@ with tab6:
     st.subheader("Próximos módulos")
     st.caption("Ainda não implementados. Cada um cruza o DOU com bases oficiais de controle.")
     st.markdown(
-        "- 👔 **Cargos e nomeações** — nomeações e exonerações do DOU por órgão\n"
         "- ✈️ **Viagens e diárias** — Portal da Transparência\n"
-        "- 🚫 **Empresas sancionadas** — CEIS/CNEP (CGU) e inidôneas do TCU cruzadas com contratos\n"
         "- 🏗️ **Obras e programas** — acompanhamento de execução\n"
         "- 🚨 **Alertas e evidências** — dossiê por fornecedor ou órgão, com histórico"
     )
