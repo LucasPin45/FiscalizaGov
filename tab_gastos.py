@@ -9,6 +9,7 @@ import streamlit as st
 
 import dou
 import gastos
+import segredos
 import ui
 
 VALIDADE_S = 12 * 3600
@@ -23,10 +24,7 @@ def _armazem() -> dict:
 
 
 def _chave_api() -> str:
-    try:
-        return str(st.secrets["TRANSPARENCIA_API_KEY"])
-    except Exception:
-        return os.getenv("TRANSPARENCIA_API_KEY", "")
+    return segredos.chave_transparencia(st.secrets)
 
 
 def _do_armazem(ano: int):
@@ -37,9 +35,20 @@ def _do_armazem(ano: int):
 
 
 @st.cache_data(ttl=900, show_spinner=False)
+def _snapshot_cache(ano: int):
+    """Lê data/gastos_AAAA.csv. Levanta se não existe: o cache NÃO guarda a ausência (senão o app
+    ficaria 15 min dizendo "sem dados" mesmo depois de o arquivo aparecer)."""
+    r = gastos.ler_snapshot(ano)
+    if r is None:
+        raise LookupError(ano)
+    return r
+
+
 def _snapshot(ano: int):
-    """Arquivo gerado de madrugada pelo GitHub Actions (data/gastos_AAAA.csv). None se ainda não existe."""
-    return gastos.ler_snapshot(ano)
+    try:
+        return _snapshot_cache(ano)
+    except LookupError:
+        return None
 
 
 def _obter(ano: int):
