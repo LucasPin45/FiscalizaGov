@@ -54,7 +54,8 @@ HTML = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta na
 <style>
 *{box-sizing:border-box}
 body{margin:0;font-family:"Source Sans Pro",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#fff}
-.wrap{background:linear-gradient(135deg,#0f2742 0%,#1d4a7a 100%);border-radius:14px;padding:18px 20px 14px}
+.wrap{background:linear-gradient(135deg,#0a3326 0%,#0f5c3b 55%,#1f8a5b 100%);border-radius:16px;padding:18px 20px 14px;
+      box-shadow:0 6px 18px rgba(11,61,46,.25)}
 .topo{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:6px;margin-bottom:12px}
 .topo h2{margin:0;font-size:1.15rem;font-weight:700}
 .topo .ao-vivo{font-size:.78rem;opacity:.85}
@@ -161,4 +162,4 @@ def render_apresentacao() -> None:
         st.warning("Não consegui carregar os totais de arrecadação e gasto agora (arquivos da CGU). "
                    "Clique em **Atualizar tudo** em instantes.")
         return
-    components.html(html_relogio(p), height=400, scrolling=True)
+    components.html(html_relogio(p), height=520, scrolling=True)

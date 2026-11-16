@@ -47,6 +47,24 @@ def _dias_uteis(n: int, hoje: dt.date) -> list:
     return out
 
 
+def resumo_apresentacao():
+    """Números do último dia com edição para a Apresentação (usa o mesmo cache da aba). None se não der para ler."""
+    try:
+        d, _, erros = dou.ultimo_dia_com_edicao(lambda x: _seguro(x), dou.hoje_brasilia())
+        if erros:
+            return None
+        mov, n_atos, _, _ = _pipeline((d,))
+    except Exception:  # noqa: BLE001 - a Apresentação nunca pode quebrar por causa de um módulo
+        return None
+    return {
+        "data": d, "atos": n_atos, "movimentacoes": int(len(mov)),
+        "alta": int((mov["Nível"] == "Alta direção").sum()) if len(mov) else 0,
+        "presidencia": int((mov["Presidência"] | mov["Decreto presidencial"]).sum()) if len(mov) else 0,
+        "nomeacoes": int((mov["Ação"] == "Nomeação").sum()) if len(mov) else 0,
+        "exoneracoes": int((mov["Ação"] == "Exoneração").sum()) if len(mov) else 0,
+    }
+
+
 def _card(r) -> str:
     quem = r["Nome"] or "(nome não identificado no trecho)"
     linhas = []
