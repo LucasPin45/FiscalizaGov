@@ -36,7 +36,12 @@ jobs:
           ANOS: ${{ github.event.inputs.anos }}
         run: python scripts/atualizar_viagens.py $ANOS
 
+      - name: Cargo e função dos viajantes (cadastro de servidores da CGU; só baixa se o mês mudou ou houver viajante novo)
+        if: success() || failure()
+        run: python scripts/atualizar_cargos_viajantes.py
+
       - name: Gravar no repositório (só se mudou)
+        if: success() || failure()
         run: |
           git config user.name "fiscalizagov-bot"
           git config user.email "fiscalizagov-bot@users.noreply.github.com"
