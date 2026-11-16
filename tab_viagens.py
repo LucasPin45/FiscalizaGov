@@ -5,6 +5,7 @@ import streamlit as st
 
 import dou
 import gastos
+import servidores
 import ui
 import viagens as vg
 
@@ -59,10 +60,52 @@ def _por_orgao(orgao: pd.DataFrame, nivel: str) -> pd.DataFrame:
     return g.fillna(0)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cargos_cache():
+    r = servidores.ler()
+    if r is None:
+        raise LookupError("cargos")  # a ausência não fica em cache
+    tabela, meta = r
+    return servidores.indice(tabela), meta
+
+
+def _cargos():
+    """(índice nome+CPF parcial -> cadastro, meta) ou ({}, {}) se o cruzamento ainda não foi gerado."""
+    try:
+        return _cargos_cache()
+    except LookupError:
+        return {}, {}
+
+
+NAO_LOCALIZADO = "não localizado no cadastro de servidores"
+
+
+def cargo_info(cpf: str, nome: str, cargo_viagem: str, funcao_viagem: str, idx: dict) -> dict:
+    """Cargo, atividade, função (legível, com o DAS equivalente) e lotação de um viajante.
+
+    Prefere o cadastro de servidores do Portal; sem ele, cai no que o próprio arquivo de viagens trouxe.
+    """
+    reg = idx.get(servidores.chave(nome, cpf)) if idx else None
+    vazio = lambda s: servidores._sem_info(s)  # noqa: E731
+    if reg and reg.get("status") == "localizado":
+        cargo = reg["cargo"] or reg["atividade"] or ("função: " + reg["funcao_desc"] if reg["funcao_desc"] else "")
+        funcao = servidores.decodificar_funcao(reg["funcao_codigo"]) or servidores.decodificar_funcao(funcao_viagem)
+        return {"cargo": cargo or "sem cargo informado no cadastro", "atividade": reg["atividade"] if reg["cargo"] else "",
+                "funcao": funcao or (reg["funcao_desc"] if reg["funcao_desc"] else ""), "lotacao": reg["lotacao"],
+                "origem": "cadastro"}
+    cargo_v = "" if vazio(cargo_viagem) else cargo_viagem
+    return {"cargo": cargo_v or (NAO_LOCALIZADO if idx else ""), "atividade": "",
+            "funcao": servidores.decodificar_funcao(funcao_viagem) or ("" if vazio(funcao_viagem) else funcao_viagem),
+            "lotacao": "", "origem": "viagem" if cargo_v else "nenhum"}
+
+
 def _card_alerta(r) -> str:
     quem = r["nome"] if r["nome"] and "sigilo" not in r["nome"].lower() else "Informações protegidas por sigilo"
+    info = cargo_info(r["cpf"], r["nome"], r["cargo"], r.get("funcao", ""), _cargos()[0]) if "sigilo" not in quem.lower() \
+        else {"cargo": "", "funcao": ""}
+    cargo_txt = info["cargo"] + (f' ({info["funcao"]})' if info["funcao"] else "")
     linhas = [f'🏛️ {dou.orgao_curto(r["sup"] + "/" + r["org"], 90)}',
-              f'🧳 {quem}' + (f' · {r["cargo"]}' if r["cargo"] else "") + (f' · CPF {r["cpf"]}' if r["cpf"] and "sigilo" not in r["cpf"].lower() else ""),
+              f'🧳 {quem}' + (f' · {cargo_txt}' if cargo_txt else "") + (f' · CPF {r["cpf"]}' if r["cpf"] and "sigilo" not in r["cpf"].lower() else ""),
               f'🧾 Diárias {vg.fmt_brl(r["diarias"])} · passagens {vg.fmt_brl(r["passagens"])}'
               + (f' · devolução {vg.fmt_brl(r["devolucao"])}' if float(r["devolucao"] or 0) > 0 else "")]
     return ui.card_generico(
@@ -188,12 +231,28 @@ def render() -> None:
         else:
             freq = int((d["viagens"] >= vg.LIMITE_FREQUENTE).sum())
             st.caption(f"{freq} de {len(d)} nesta lista têm {vg.LIMITE_FREQUENTE} ou mais viagens no ano.")
+            idx, meta_c = _cargos()
+            infos = [cargo_info(c, n, cg, fn, idx) for c, n, cg, fn in zip(d["cpf"], d["nome"], d["cargo"], d["funcao"])]
+            d = d.assign(cargo_portal=[i["cargo"] for i in infos], atividade_portal=[i["atividade"] for i in infos],
+                         funcao_legivel=[i["funcao"] for i in infos], lotacao_portal=[i["lotacao"] for i in infos])
             vis = pd.DataFrame({
-                "Nome": d["nome"], "CPF": d["cpf"], "Cargo": d["cargo"], "Função": d["funcao"],
+                "Nome": d["nome"], "CPF": d["cpf"], "Cargo": d["cargo_portal"], "Atividade": d["atividade_portal"],
+                "Função": d["funcao_legivel"], "Lotação": d["lotacao_portal"],
                 "Órgão superior": d["sup"], "Viagens": d["viagens"].astype(int), "Dias viajados": d["dias"].astype(int),
                 "% urgentes": (d["urgentes"] / d["viagens"] * 100).map(_pct),
                 "Internacionais": d["internacionais"].astype(int), "Gasto total": d["total"].map(_brl)})
             st.dataframe(vis, use_container_width=True, hide_index=True)
+            if idx:
+                ref = str(meta_c.get("referencia", ""))
+                ref_txt = f"{ref[4:6]}/{ref[:4]}" if len(ref) == 6 else "—"
+                loc = float(sum(1 for i in infos if i["origem"] == "cadastro")) / max(len(infos), 1) * 100
+                st.caption(f"💼 Cargo e função vêm do cadastro de servidores do Portal da Transparência (referência {ref_txt}), "
+                           f"cruzado por nome completo e pelos dígitos visíveis do CPF: {_pct(loc)} desta lista foi localizada. "
+                           "Militares das Forças Armadas, parte da segurança pública e quem não é servidor não têm cadastro "
+                           "publicado e aparecem como “não localizado”. O cargo pode ter mudado depois do mês de referência.")
+            else:
+                st.caption("💼 O cargo vem do arquivo de viagens, que muitas vezes não o informa. O cruzamento com o cadastro "
+                           "de servidores aparece depois da próxima atualização semanal.")
             ui.botoes_download(d, f"fiscalizagov_viajantes_{ano}", "vg_dl2")
 
     with t_alertas:
