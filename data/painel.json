@@ -1,28 +1,28 @@
 {
  "ano": 2026,
  "gasto": {
-  "amortizacao_liquidada": 1837233460442.8499,
-  "asof": "2026-11-13",
-  "asof_ms": 1794538800000,
-  "gasto_empenhado": 3546732805366.8896,
-  "gasto_liquidado": 3168343478642.9404,
-  "juros_liquidado": 498598763850.22003,
-  "juros_por_segundo": 18262.085525456372,
-  "ritmo": 116046.33580355355,
-  "ritmo_ano": 116046.33580355355,
-  "ritmo_base": "média do ano"
+  "amortizacao_liquidada": 1837519298530.74,
+  "asof": "2026-11-17",
+  "asof_ms": 1794884400000,
+  "gasto_empenhado": 3555207552024.3,
+  "gasto_liquidado": 3173939120559.11,
+  "juros_liquidado": 498524699844.45,
+  "juros_por_segundo": 18031.130636735026,
+  "ritmo": 16191.093507434703,
+  "ritmo_ano": 114798.14527485207,
+  "ritmo_base": "últimos 4 dias"
  },
- "gerado_em": "16/11/2026 19:23",
+ "gerado_em": "17/11/2026 18:09",
  "inicio_ano_ms": 1767236400000,
  "receita": {
-  "arrecadacao": 2934617758771.4,
-  "asof": "2026-11-13",
-  "asof_ms": 1794538800000,
-  "credito": 2165440615121.4302,
-  "mesmo_periodo_ano_anterior": 2681940994275.84,
-  "refinanciamento": 1502341453701.44,
-  "ritmo": 113275.97228968752,
-  "ritmo_ano": 107485.70670605515,
+  "arrecadacao": 2961716510943.9297,
+  "asof": "2026-11-15",
+  "asof_ms": 1794711600000,
+  "credito": 2182929036129.1702,
+  "mesmo_periodo_ano_anterior": 2683421763073.8604,
+  "refinanciamento": 1502799941892.39,
+  "ritmo": 121344.8629056327,
+  "ritmo_ano": 107795.99460400396,
   "ritmo_base": "últimos 30 dias"
  }
 }
