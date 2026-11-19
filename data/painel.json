@@ -12,17 +12,17 @@
   "ritmo_ano": 114798.14527485207,
   "ritmo_base": "últimos 4 dias"
  },
- "gerado_em": "18/11/2026 17:45",
+ "gerado_em": "19/11/2026 17:51",
  "inicio_ano_ms": 1767236400000,
  "receita": {
-  "arrecadacao": 2963903883425.16,
-  "asof": "2026-11-17",
-  "asof_ms": 1794884400000,
-  "credito": 2184542943803.24,
-  "mesmo_periodo_ano_anterior": 2683423796287.12,
-  "refinanciamento": 1503283652101.2397,
-  "ritmo": 121776.09627627317,
-  "ritmo_ano": 107201.38467249567,
+  "arrecadacao": 2968160157362.21,
+  "asof": "2026-11-19",
+  "asof_ms": 1795057200000,
+  "credito": 2208997368702.18,
+  "mesmo_periodo_ano_anterior": 2684858906528.7,
+  "refinanciamento": 1515958567440.51,
+  "ritmo": 123687.99578473766,
+  "ritmo_ano": 106688.52647523471,
   "ritmo_base": "últimos 30 dias"
  }
 }
